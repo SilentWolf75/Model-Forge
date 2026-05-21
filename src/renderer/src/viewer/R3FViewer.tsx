@@ -294,7 +294,7 @@ function ViewerScene({
       gl.render(scene, camera)
       try { return gl.domElement.toDataURL('image/png') } catch { return null }
     },
-  }))
+  }), [])
 
   // ── Per-frame: lights + bounce + bed fade ──────────────────────────────────
   useFrame(({ clock }) => {
@@ -568,21 +568,23 @@ function ViewerScene({
     const mesh3  = new THREE.Mesh(geo, mat)
     mesh3.name   = 'model'
 
-    // Centre in XZ before adding to scene (local-space is still world-space here)
     geo.computeBoundingBox()
     const lb   = geo.boundingBox!
     mesh3.position.x = -(lb.min.x + lb.max.x) / 2
     mesh3.position.z = -(lb.min.z + lb.max.z) / 2
-
-    // Sit on bed
     mesh3.position.y = BED_SURFACE_Y + MODEL_BED_GAP_MM - lb.min.y
 
-    scene.add(mesh3)
+    // Wrap before scene add — root stays at origin so local space = world space
+    const root = new THREE.Group()
+    root.name  = 'modelRoot'
+    root.add(mesh3)
     mesh3.updateMatrixWorld(true)
 
     // Thin part boost
     applyThinPartBoost(mesh3)
 
+    scene.add(root)
+    modelRootRef.current = root
     mesh3.updateMatrixWorld(true)
     const wb = new THREE.Box3().setFromObject(mesh3)
 
@@ -595,16 +597,6 @@ function ViewerScene({
     const bed   = createBedGroup(gW, gD)
     scene.add(bed)
     bedGroupsRef.current = [bed]
-
-    // Wrap in a Group so open-edge overlay and modelRootRef.current name check work
-    const root = new THREE.Group()
-    root.name  = 'modelRoot'
-    scene.add(root)
-    // Re-parent mesh3 under root
-    scene.remove(mesh3)
-    root.add(mesh3)
-    mesh3.updateMatrixWorld(true)
-    modelRootRef.current = root
 
     // Camera
     const center = wb.getCenter(new THREE.Vector3())
