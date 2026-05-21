@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Model Forge — 3D print viewer</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #0c0d10;
+        color: #e8ebf7;
+      }
+      #root {
+        min-height: 100vh;
+      }
+    </style>
+    <!-- dragover must be cancelled for drop to be allowed; do not cancel drop here (React handles it). -->
+    <script>
+      window.addEventListener(
+        'dragover',
+        function (e) {
+          e.preventDefault()
+        },
+        true
+      )
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/main.tsx"></script>
+  </body>
+</html>

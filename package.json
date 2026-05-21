@@ -1,0 +1,136 @@
+{
+  "name": "model-forge-viewer-2",
+  "version": "2.0.0-alpha.1",
+  "description": "Desktop 3D model viewer and converter for 3D printing (STL, OBJ, 3MF, STEP) — v2 rewrite",
+  "main": "out/main/index.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "pack:win": "npm run icons && npm run build && node scripts/pack-win.cjs",
+    "pack:win:setup": "npm run icons && npm run build && node scripts/pack-win.cjs -- --win nsis",
+    "icons": "node scripts/generate-icon.mjs"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^7.48.3",
+    "@babylonjs/loaders": "^7.48.3",
+    "@babylonjs/materials": "^7.48.3",
+    "fast-xml-parser": "^4.5.1",
+    "jszip": "^3.10.1",
+    "occt-import-js": "^0.0.23",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "png-to-ico": "^3.0.1",
+    "rcedit": "^5.0.2",
+    "sharp": "^0.33.5",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "com.modelforge.viewer",
+    "productName": "Model Forge",
+    "copyright": "Copyright © 2026",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "icon": "icon.png",
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "out/renderer/**/*.wasm"
+    ],
+    "afterPack": "./scripts/after-pack-rcedit.cjs",
+    "extraFiles": [
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "fileAssociations": [
+      {
+        "ext": "stl",
+        "name": "ModelForge.stl",
+        "description": "Stereolithography / 3D print mesh",
+        "icon": "icon.ico"
+      },
+      {
+        "ext": "obj",
+        "name": "ModelForge.obj",
+        "description": "Wavefront OBJ model",
+        "icon": "icon.ico"
+      },
+      {
+        "ext": "3mf",
+        "name": "ModelForge.3mf",
+        "description": "3D Manufacturing Format",
+        "icon": "icon.ico"
+      },
+      {
+        "ext": "step",
+        "name": "ModelForge.step",
+        "description": "ISO STEP CAD",
+        "icon": "icon.ico"
+      },
+      {
+        "ext": "stp",
+        "name": "ModelForge.stp",
+        "description": "ISO STEP CAD",
+        "icon": "icon.ico"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "shortcutName": "Model Forge",
+      "artifactName": "${productName}-${version}-Setup.${ext}",
+      "perMachine": true,
+      "include": "build/installer.nsh"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    },
+    "win": {
+      "icon": "icon.ico",
+      "signAndEditExecutable": false,
+      "verifyUpdateCodeSignature": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}
