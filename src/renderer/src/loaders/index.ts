@@ -1,5 +1,5 @@
 import type { TriangleMesh } from '../mesh/types'
-import { loadStl, loadObj } from './babylonFormats'
+import { loadStl, loadObj } from './threeFormats'
 import { loadThreeMf } from './threeMf'
 import { loadStep, type StepOcctParams } from './stepOcct'
 import type { LoadProgressCallback } from './loadTypes'

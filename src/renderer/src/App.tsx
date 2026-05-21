@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BabylonViewer, type BabylonViewerHandle, type ViewMode } from './viewer/BabylonViewer'
+import { R3FViewer, type ViewerHandle, type ViewMode } from './viewer/R3FViewer'
 import {
   readStoredCameraPresetId,
   writeStoredCameraPresetId,
@@ -325,7 +325,7 @@ export function App(): JSX.Element {
     ptB: [number, number, number]
   } | null>(null)
   const exportDropdownRef = useRef<HTMLDivElement>(null)
-  const viewerRef = useRef<BabylonViewerHandle>(null)
+  const viewerRef = useRef<ViewerHandle>(null)
   /** Avoid consuming startup path twice (React Strict Mode remount). */
   const startupOpenHandled = useRef(false)
   /** Set true when user cancels; checked after async work. Cannot interrupt WASM mid-call. */
@@ -957,7 +957,7 @@ export function App(): JSX.Element {
       </header>
       <main className="main">
         <div className="viewer-wrap">
-          <BabylonViewer
+          <R3FViewer
             ref={viewerRef}
             mesh={mesh}
             viewMode={viewMode}
