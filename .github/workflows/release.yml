@@ -65,7 +65,7 @@ jobs:
           sips -z 1024 1024 build/icon.png --out build/icon.iconset/icon_512x512@2x.png
           iconutil -c icns build/icon.iconset -o build/icon.icns
           npm run build
-          electron-builder --mac
+          npx electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MAIN_VITE_UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
