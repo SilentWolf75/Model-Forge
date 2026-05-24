@@ -109,6 +109,46 @@ function savePersistedWindowState(win: BrowserWindow): void {
   }
 }
 
+// ── Update checker ────────────────────────────────────────────────────────────
+// Fine-grained PAT with "Metadata" read-only permission (cannot access code).
+// Create one at: github.com/settings/personal-access-tokens/new
+//   → Fine-grained token → Repository: Model-Forge → Permissions: Metadata = Read-only
+const UPDATE_REPO  = 'SilentWolf75/Model-Forge'
+const UPDATE_TOKEN = '' // <-- paste your fine-grained PAT here
+
+async function checkForUpdates(win: BrowserWindow): Promise<void> {
+  if (!UPDATE_TOKEN) return
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`,
+      {
+        headers: {
+          'User-Agent':    'Model-Forge-Updater',
+          'Accept':        'application/vnd.github+json',
+          'Authorization': `Bearer ${UPDATE_TOKEN}`
+        }
+      }
+    )
+    if (!res.ok) return
+    const data = await res.json() as { tag_name: string; html_url: string }
+    const latest  = data.tag_name.replace(/^v/, '')
+    const current = app.getVersion()
+    if (latest === current) return
+    const { response } = await dialog.showMessageBox(win, {
+      type:      'info',
+      title:     'Update Available',
+      message:   `Model Forge ${data.tag_name} is available`,
+      detail:    `You are running v${current}.\n\nWould you like to go to the download page?`,
+      buttons:   ['Download', 'Later'],
+      defaultId: 0,
+      cancelId:  1
+    })
+    if (response === 0) shell.openExternal(data.html_url)
+  } catch {
+    // Best-effort — silently ignore network errors
+  }
+}
+
 function createWindow(): void {
   const icon = windowIconPath()
   const saved = loadPersistedWindowState()
@@ -395,6 +435,13 @@ if (!app.requestSingleInstanceLock()) {
     })
 
     createWindow()
+
+    // Check for updates ~3 s after startup so the window is fully loaded first
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        void checkForUpdates(mainWindow)
+      }
+    }, 3000)
 
     app.on('activate', function () {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
