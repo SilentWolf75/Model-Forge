@@ -1,92 +1,127 @@
-# Model Forge — 3D Print Viewer
+<div align="center">
 
-A desktop 3D model viewer built for print preparation. Inspect, orient, analyze, and export your models before sending them to the slicer — with full support for Bambu Lab multi-plate and AMS color 3MF files.
+# Model Forge
 
-![Model Forge — AMS multi-color model](docs/screenshots/main-view.png)
+**A desktop 3D print viewer built for serious makers.**
+
+Inspect, orient, analyze, and export your models before sending them to the slicer —
+with full support for Bambu Lab multi-plate and AMS color 3MF files.
+
+[![Release](https://img.shields.io/github/v/release/SilentWolf75/Model-Forge?style=flat-square)](https://github.com/SilentWolf75/Model-Forge/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue?style=flat-square)](#downloads)
+[![License](https://img.shields.io/github/license/SilentWolf75/Model-Forge?style=flat-square)](LICENSE)
+
+![Model Forge — main view](docs/screenshots/main-view.png)
+
+</div>
 
 ---
 
 ## Downloads
 
-Head to the [Releases](https://github.com/SilentWolf75/Model-Forge/releases) page to grab the latest build.
+Grab the latest build from the [Releases](https://github.com/SilentWolf75/Model-Forge/releases) page.
 
 | File | Platform | Description |
 |------|----------|-------------|
-| `Model Forge-x.x.x-Setup.exe` | Windows | Installer — adds Start Menu shortcut and file associations |
-| `Model Forge-x.x.x-portable.exe` | Windows | Portable — single `.exe`, no installation needed |
-| `Model Forge-x.x.x-mac.dmg` | macOS | Universal DMG — runs on both Intel and Apple Silicon |
+| `Model Forge-x.x.x-Setup.exe` | Windows | Installer — Start Menu shortcut + file associations |
+| `Model Forge-x.x.x-portable.exe` | Windows | Portable — single `.exe`, no install needed |
+| `Model Forge-x.x.x-mac.dmg` | macOS | Universal DMG — Intel + Apple Silicon |
 
-> **Windows:** 10 / 11 x64  
-> **macOS:** 10.15 Catalina or later (Intel + Apple Silicon)  
-> First launch on macOS requires **right-click → Open** to bypass the unsigned app warning.
+> **Windows:** 10 / 11 x64 &nbsp;·&nbsp; **macOS:** 10.15 Catalina or later (Intel + Apple Silicon)
+>
+> First launch on macOS: **right-click → Open** to bypass the unsigned app warning.
 
 ---
 
 ## Features
 
-### Viewing
-- Solid, Wireframe, and X-ray (look-through) view modes
-- Ambient occlusion for realistic depth
-- Camera presets (Quick / Default) with persisted settings
-- Turntable auto-rotate for hands-free presentation
-- Drag-and-drop file loading
-
 ### Print Preparation
-- **Auto-orient** — automatically rotates models flat-side-down on load, ready to print
-- **Snap to bed** — drops the model so the lowest vertex sits exactly on the plate
-- **Rotate** — 90° steps around X, Y, Z axes
-- **Overhang analysis** — heat-map view highlights faces that need support (red > 45°, green ≤ 45°)
-- **Mesh repair** — removes degenerate triangles, welds open seams
+
+- **Auto-orient** — non-3MF files (STL, OBJ, STEP, etc.) are automatically rotated flat-side-down on load, matching slicer placement
+- **Snap to bed** — drops the model so its lowest vertex sits exactly on the plate
+- **Rotate** — 90° steps around X, Y, and Z axes
+- **Mesh repair** — removes degenerate triangles and welds open seams
 - **Open edge detection** — highlights non-watertight boundary edges in orange
 
-![Overhang heat map view](docs/screenshots/overhang.png)
+### Overhang Analysis
 
-### 3MF / Bambu Lab Support
-- Full multi-plate layout with correct per-plate positioning
-- AMS multi-color filament display with color swatches
-- NOAMS (single-extruder multi-plate) correct per-plate colors
-- Filament slot labels (T1, T2…) and material names
-- Slicer package metadata: printer, bed type, layer height, nozzle
+Faces are color-coded by their angle from horizontal using a real-time GLSL shader — green for printable, red for critical overhangs above 45°.
+
+![Overhang heat map](docs/screenshots/overhang.png)
+
+### Bambu Lab / 3MF Support
+
+Full support for the Bambu Lab 3MF format, including multi-plate layouts, AMS color data, and slicer metadata.
 
 ![Multi-plate 3MF layout](docs/screenshots/multi-plate.png)
 
-### Analysis
-- Triangle and vertex count
+- Multi-plate layout with correct per-plate positioning
+- AMS multi-color filament display with color swatches
+- NOAMS (single-extruder multi-plate) correct per-plate colors
+- Filament slot labels (T1, T2…) and material names
+- Slicer metadata: printer profile, bed type, layer height, nozzle size
+
+### Viewing
+
+- Solid, Wireframe, Look-through, Face-orient, and Overhang view modes
+- Screen-space ambient occlusion for realistic depth
+- Turntable auto-rotate for hands-free presentation
+- Exploded view for multi-body models
+- Light / dark theme with persisted preference
+- Camera presets (Quick / Default)
+
+### Analysis Sidebar
+
+- Vertex and triangle count
 - Bounding box dimensions (X × Y × Z mm)
 - Surface area and volume
-- Estimated print weight (PLA)
-- Shell count, overhang percentage
+- Estimated print weight (PLA density)
+- Shell count and overhang percentage
 - Print readiness checklist with actionable tips
+- Slicer package metadata (printer, bed, layer height, nozzle)
 
 ### Tools
-- **Measure** — click two points on the model to get the straight-line distance in mm
-- **Annotations** — pin text notes to any point on the model surface
-- **Command palette** (Ctrl+K) — fuzzy search across all app actions
-- **Undo / Redo** (Ctrl+Z / Ctrl+Y) — 10-step history for all mesh operations
-- **Screenshot** — export the current viewport as PNG
-- **Open in slicer** — send the file directly to your default slicer
 
-### Export
-| Format | Notes |
-|--------|-------|
-| STL (binary) | Single model or per-plate batch export |
-| OBJ | With material file |
-| 3MF | Preserves mesh structure |
+| Tool | Description |
+|------|-------------|
+| **Measure** | Click two points on the model — get the straight-line distance in mm |
+| **Annotations** | Pin text notes to any point on the model surface |
+| **Command palette** `Ctrl+K` | Fuzzy search across all app actions |
+| **Undo / Redo** `Ctrl+Z` / `Ctrl+Y` | 10-step history for all mesh operations |
+| **Screenshot** | Export the current viewport as PNG |
+| **Open in slicer** | Send the file directly to your default slicer app |
+| **Batch export** | Export all plates of a multi-plate 3MF to individual STL files |
 
 ---
 
-## Supported Import Formats
+## Supported Formats
 
 | Format | Notes |
 |--------|-------|
-| STL | Binary and ASCII |
-| OBJ | With MTL materials |
-| 3MF | Full Bambu / Orca Slicer metadata |
-| STEP / STP | Via WASM CAD kernel (occt-import-js) |
-| PLY | Binary and ASCII |
-| AMF | Additive Manufacturing Format |
-| FBX | Via Three.js loader |
-| GLTF / GLB | Via Three.js loader |
+| **3MF** | Full Bambu Lab / Orca Slicer metadata, multi-plate, AMS color |
+| **STL** | Binary and ASCII |
+| **OBJ** | With MTL material file |
+| **STEP / STP** | Via WASM CAD kernel (occt-import-js) |
+| **PLY** | Binary and ASCII |
+| **AMF** | Additive Manufacturing Format |
+| **FBX** | Via Three.js loader |
+| **GLTF / GLB** | Via Three.js loader |
+
+---
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `O` | Open file |
+| `W` / `S` / `L` | Wireframe / Solid / Look-through |
+| `H` | Overhang heat map |
+| `T` | Toggle turntable |
+| `R` | Reset camera |
+| `P` | Screenshot |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / Redo |
+| `Ctrl+K` | Command palette |
+| `?` | Show all shortcuts |
 
 ---
 
@@ -116,12 +151,12 @@ Output goes to the `release/` folder.
 
 | Layer | Technology |
 |-------|-----------|
-| Desktop shell | Electron 42 |
+| Desktop shell | Electron 35 |
 | Frontend | React 18 + TypeScript 5 |
 | 3D rendering | React Three Fiber (Three.js r184) |
 | Post-processing | N8AO ambient occlusion |
 | CAD kernel | occt-import-js (WASM) |
-| 3MF / ZIP | JSZip + fast-xml-parser |
+| 3MF / ZIP parsing | JSZip + fast-xml-parser |
 | Build | electron-vite + Vite 8 |
 | Packaging | electron-builder (NSIS + portable + DMG) |
 
