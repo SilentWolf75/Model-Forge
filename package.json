@@ -137,7 +137,7 @@
       ]
     },
     "mac": {
-      "icon": "build/icon.png",
+      "icon": "build/icon.icns",
       "category": "public.app-category.utilities",
       "identity": null,
       "notarize": false,
