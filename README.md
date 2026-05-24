@@ -7,9 +7,9 @@
 Inspect, orient, analyze, and export your models before sending them to the slicer —
 with full support for Bambu Lab multi-plate and AMS color 3MF files.
 
-[![Release](https://img.shields.io/github/v/release/SilentWolf75/Model-Forge?style=flat-square)](https://github.com/SilentWolf75/Model-Forge/releases/latest)
+[![Release](https://img.shields.io/badge/release-v2.0.0--alpha.5-blue?style=flat-square)](https://github.com/SilentWolf75/Model-Forge/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue?style=flat-square)](#downloads)
-[![License](https://img.shields.io/github/license/SilentWolf75/Model-Forge?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
 ![Model Forge — main view](docs/screenshots/main-view.png)
 
