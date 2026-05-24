@@ -11,6 +11,7 @@
     "preview": "electron-vite preview",
     "pack:win": "npm run icons && npm run build && node scripts/pack-win.cjs",
     "pack:win:setup": "npm run icons && npm run build && node scripts/pack-win.cjs -- --win nsis",
+    "pack:mac": "npm run icons && npm run build && electron-builder --mac --publish never",
     "icons": "node scripts/generate-icon.mjs"
   },
   "dependencies": {
@@ -134,6 +135,35 @@
           ]
         }
       ]
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "notarize": false,
+      "extraFiles": [],
+      "extraResources": [
+        {
+          "from": "build/icon.png",
+          "to": "icon.png"
+        }
+      ],
+      "fileAssociations": [
+        { "ext": "stl",  "name": "STL 3D model",  "role": "Viewer" },
+        { "ext": "obj",  "name": "OBJ 3D model",  "role": "Viewer" },
+        { "ext": "3mf",  "name": "3MF 3D model",  "role": "Viewer" },
+        { "ext": "step", "name": "STEP CAD file", "role": "Viewer" },
+        { "ext": "stp",  "name": "STEP CAD file", "role": "Viewer" }
+      ],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["universal"]
+        }
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-mac.${ext}"
     }
   }
 }

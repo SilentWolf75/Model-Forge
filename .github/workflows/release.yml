@@ -1,0 +1,65 @@
+name: Build Release
+
+# Runs automatically when you publish a release on GitHub.
+# Builds the Windows installer + portable and the Mac DMG,
+# then uploads them to the release as downloadable assets.
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Windows ────────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows (installer + portable)
+        run: npm run pack:win
+
+      - name: Upload Windows assets to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/Model Forge-*-Setup.exe
+            release/Model Forge-*-portable.exe
+
+  # ── macOS ──────────────────────────────────────────────────────────────────
+  build-mac:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Mac (universal DMG)
+        run: npm run pack:mac
+        env:
+          # Disable automatic code-signing identity search.
+          # Users will need to right-click → Open the first time (unsigned app).
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload Mac assets to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/Model Forge-*.dmg
