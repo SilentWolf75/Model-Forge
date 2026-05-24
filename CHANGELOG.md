@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0 Alpha 5 — 2026-05-24
+
+- **Auto-orient on load:** Non-3MF files (STL, OBJ, STEP, PLY, AMF, FBX, GLTF) are automatically rotated flat-side-down when loaded, matching how the model would be placed in a slicer. 3MF files are already correctly oriented by the slicer and are not rotated.
+- **Overhang scoring fix:** The auto-orient scoring algorithm now correctly identifies print-ready orientations. Previously, a large flat base on the bed was penalised (it has downward-facing normals), causing models to load upside-down. Fixed by splitting downward-facing triangles into two buckets — bed-contact zone (excluded from penalty, counted as a bonus) and true overhangs above the bed (penalised). Flat-base-down orientations now win decisively.
+- **Bambu multi-plate scatter fix:** Single-file Bambu 3MF models (e.g. multi-plate NOAMS prints) no longer scatter sub-objects across thousands of mm. Root cause: `<assemble_item>` transforms encode CAD assembly view positions, not print-bed placement. Multiplying them onto `<build><item>` transforms for single-file 3MFs displaced geometry far off the bed. Fixed by only applying assemble transforms for split-format (multi-file) Bambu 3MFs where they encode actual print placement.
+- **NOAMS color fix:** Multi-plate single-extruder (NOAMS) 3MF files now display the correct filament color per plate. The viewer was using `extruderSlot` (always 1 for NOAMS) instead of `part.filamentSlot` derived from each plate's `plate_N.json` `first_extruder` field.
+- **Removed bottom plate thumbnail strip:** The frosted bar at the bottom of the viewport showing plate thumbnails has been removed. Plate thumbnails remain in the right sidebar.
+- **Shadow fixes:** Resolved two Three.js r184 warnings — `MultiplyBlending` now correctly sets `premultipliedAlpha: true` on the blob shadow material; shadow map updated from deprecated `PCFSoftShadowMap` to `PCFShadowMap`.
+- **Mac support:** Universal DMG build (Intel + Apple Silicon) is now available on the Releases page, built automatically via GitHub Actions on every release. First launch requires right-click → Open to bypass the unsigned app warning.
+- **GitHub Actions CI:** Windows installer, Windows portable, and Mac DMG are now built and uploaded automatically when a release is published on GitHub. No manual build step required.
+- **Update checker:** The app silently checks GitHub for a newer release ~3 seconds after startup. If one is found, a dialog offers to open the download page. Fails silently if offline or the check times out.
+
 ## 2.0 Alpha 4 — 2026-05-24
 
 - **Turntable:** New **Turntable** toggle in the Scene toolbar (keyboard **T**) enables OrbitControls `autoRotate` at 1.5 rpm for hands-free model presentation. Turns off automatically on new load.
