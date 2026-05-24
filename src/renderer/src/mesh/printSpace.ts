@@ -1,20 +1,3 @@
-import type { TriangleMesh } from './types'
-
-export function scalePositions(mesh: TriangleMesh, factor: number): TriangleMesh {
-  if (factor === 1) {
-    return {
-      positions: new Float32Array(mesh.positions),
-      indices: new Uint32Array(mesh.indices)
-    }
-  }
-  const p = mesh.positions
-  const out = new Float32Array(p.length)
-  for (let i = 0; i < p.length; i++) {
-    out[i] = p[i] * factor
-  }
-  return { positions: out, indices: new Uint32Array(mesh.indices) }
-}
-
 /** 3MF `model@unit` values → millimeters */
 export function threeMfUnitToMmScale(unit: string | undefined): number {
   const u = (unit ?? 'millimeter').toLowerCase().replace(/\s+/g, '')

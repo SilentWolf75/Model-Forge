@@ -1,3 +1,10 @@
+/** One distinct-color object within a plate (multi-color plates only). */
+export interface TriangleMeshPlateSubObject {
+  mesh: TriangleMesh
+  /** 1-based extruder/filament slot that determines this object’s color. */
+  extruderSlot: number
+}
+
 /** One slicer plate’s geometry (viewer draws a separate bed per entry when multiple). */
 export interface TriangleMeshPlatePart {
   /** Slicer plate index (often 1-based in metadata). */
@@ -8,6 +15,12 @@ export interface TriangleMeshPlatePart {
    * per-triangle material colours — drives preview tint from `packageMeta.filamentColorsHex[slot-1]`.
    */
   filamentSlot?: number
+  /**
+   * Per-object sub-meshes when this plate contains ≥2 objects with different extruder slots.
+   * When present, the viewer renders each sub-object with its own filament color instead of
+   * applying a single flat tint to the merged plate mesh.
+   */
+  subObjects?: TriangleMeshPlateSubObject[]
 }
 
 /** One `<object>` from the OPC model for sidebar / tooling. */
@@ -69,6 +82,12 @@ export type ThreeMfPackageMeta = {
    * Consumers can read bytes from the archive when building a plate picker.
    */
   plateThumbnailPaths?: string[]
+  /**
+   * Data URLs (`data:image/png;base64,…`) for each plate thumbnail, parallel to `plateThumbnailPaths`.
+   * Extracted eagerly during load so the UI can display them without re-opening the archive.
+   * Empty string entries indicate thumbnails that failed to decode.
+   */
+  plateThumbnailDataUrls?: string[]
   /**
    * `<object id="…">` values from the primary OPC `3dmodel.model` resources (parse / filter diagnostics).
    */

@@ -21,10 +21,72 @@ export type MeshAnalysis = {
   signedVolumeMm3: number
   triangleCount: number
   vertexCount: number
+  /**
+   * Number of disconnected vertex-connected components (shells).
+   * 1 = single solid body.  >1 = multiple bodies or stray geometry.
+   */
+  shellCount: number
+  /**
+   * Number of triangles whose face normal points more than 45° below the build plane
+   * (face normal Y component < –cos45°). Rough indicator of unsupported overhangs.
+   */
+  overhangTriangleCount: number
 }
 
 /** Common desktop FDM build plate upper bound for “fits typical bed” hints (mm). */
 const COMMON_BED_MAX_MM = 310
+
+// ─── Shell count (union-find on vertex indices) ───────────────────────────────
+
+function countShells(nVerts: number, indices: Uint32Array): number {
+  const parent = new Int32Array(nVerts)
+  for (let i = 0; i < nVerts; i++) parent[i] = i
+
+  function find(x: number): number {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]!]!   // path halving
+      x = parent[x]!
+    }
+    return x
+  }
+
+  for (let t = 0; t < indices.length; t += 3) {
+    const ra = find(indices[t]!)
+    const rb = find(indices[t + 1]!)
+    const rc = find(indices[t + 2]!)
+    if (ra !== rb) parent[ra] = rb
+    const rb2 = find(rb)
+    if (rb2 !== rc) parent[rb2] = rc
+  }
+
+  let roots = 0
+  for (let i = 0; i < nVerts; i++) if (find(i) === i) roots++
+  return roots
+}
+
+// ─── Overhang triangle count ──────────────────────────────────────────────────
+
+/** face-normal Y < -cos(45°) ≈ -0.7071 — faces pointing more than 45° below horizontal */
+const OVERHANG_COS = Math.cos(45 * Math.PI / 180)
+
+function countOverhangTriangles(p: Float32Array, indices: Uint32Array): number {
+  let count = 0
+  for (let t = 0; t < indices.length; t += 3) {
+    const i0 = indices[t]! * 3
+    const i1 = indices[t + 1]! * 3
+    const i2 = indices[t + 2]! * 3
+    const ux = p[i1]! - p[i0]!, uy = p[i1 + 1]! - p[i0 + 1]!, uz = p[i1 + 2]! - p[i0 + 2]!
+    const vx = p[i2]! - p[i0]!, vy = p[i2 + 1]! - p[i0 + 1]!, vz = p[i2 + 2]! - p[i0 + 2]!
+    // cross product Y component: uz*vx - ux*vz
+    const nx = uy * vz - uz * vy
+    const ny = uz * vx - ux * vz
+    const nz = ux * vy - uy * vx
+    const len = Math.hypot(nx, ny, nz)
+    if (len < 1e-10) continue
+    if (ny / len < -OVERHANG_COS) count++
+  }
+  return count
+}
 
 function cross(ax: number, ay: number, az: number, bx: number, by: number, bz: number): [number, number, number] {
   return [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx]
@@ -90,6 +152,10 @@ export function analyzeMesh(mesh: TriangleMesh): MeshAnalysis {
     signedVolumeMm3 += dot(ax, ay, az, nx, ny, nz) / 6
   }
 
+  const nVerts = p.length / 3
+  const shellCount         = nVerts > 0 ? countShells(nVerts, ix) : 0
+  const overhangTriangleCount = ix.length > 0 ? countOverhangTriangles(p, ix) : 0
+
   return {
     bounds: {
       min: [minx, miny, minz],
@@ -100,7 +166,9 @@ export function analyzeMesh(mesh: TriangleMesh): MeshAnalysis {
     surfaceAreaMm2,
     signedVolumeMm3,
     triangleCount: ix.length / 3,
-    vertexCount: p.length / 3
+    vertexCount: nVerts,
+    shellCount,
+    overhangTriangleCount,
   }
 }
 
@@ -109,7 +177,7 @@ export type PrintReadinessLine = { level: 'ok' | 'info' | 'warn'; text: string }
 /** Heuristic checklist for FDM-oriented workflows (not a substitute for a slicer). */
 export function printReadinessLines(analysis: MeshAnalysis, repairRemovedDegenerate: number): PrintReadinessLine[] {
   const lines: PrintReadinessLine[] = []
-  const { bounds, triangleCount, vertexCount, signedVolumeMm3 } = analysis
+  const { bounds, triangleCount, vertexCount, signedVolumeMm3, shellCount, overhangTriangleCount } = analysis
   const [dx, dy, dz] = bounds.size
   const footprint = Math.max(dx, dz)
   const volAbs = Math.abs(signedVolumeMm3)
@@ -174,6 +242,30 @@ export function printReadinessLines(analysis: MeshAnalysis, repairRemovedDegener
     level: 'info',
     text: `${vertexCount.toLocaleString()} raw vertex positions (OBJ/STL may repeat vertices per face).`
   })
+
+  if (shellCount > 1) {
+    lines.push({
+      level: 'info',
+      text: `${shellCount} disconnected shells — may be intentional (multi-body) or stray geometry; check in your slicer.`
+    })
+  } else if (shellCount === 1) {
+    lines.push({ level: 'ok', text: 'Single connected shell.' })
+  }
+
+  const overhangPct = triangleCount > 0 ? (overhangTriangleCount / triangleCount) * 100 : 0
+  if (overhangPct > 30) {
+    lines.push({
+      level: 'warn',
+      text: `${overhangPct.toFixed(1)}% of triangles are likely overhangs (>45° below horizontal) — supports may be needed.`
+    })
+  } else if (overhangPct > 5) {
+    lines.push({
+      level: 'info',
+      text: `${overhangPct.toFixed(1)}% of triangles are potential overhangs — review support needs in your slicer.`
+    })
+  } else {
+    lines.push({ level: 'ok', text: `${overhangPct.toFixed(1)}% overhang triangles — low overhang fraction.` })
+  }
 
   return lines
 }

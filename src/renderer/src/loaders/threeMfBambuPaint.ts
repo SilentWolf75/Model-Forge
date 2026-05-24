@@ -167,16 +167,22 @@ export function readTrianglePaintRgbFromPalette(
     const tri = tris[t] as Record<string, unknown>
     const enc = trianglePaintColorString(tri)
     if (!enc) {
-      out[t * 3] = neutral[0]
-      out[t * 3 + 1] = neutral[1]
-      out[t * 3 + 2] = neutral[2]
+      // Unpainted triangle → base filament (slot 1) when a palette is present;
+      // fall back to neutral grey only when there is no palette at all.
+      const [r, g, b] = paletteLinearRgb ? rgbForEnforcerState(1, paletteLinearRgb) : neutral
+      out[t * 3] = r
+      out[t * 3 + 1] = g
+      out[t * 3 + 2] = b
       continue
     }
     anyPaint = true
     const bits = paintColorHexToBits(enc)
     const leaves = collectLeafEnforcerStates(bits)
     const st = dominantNonNoneState(leaves)
-    const [r, g, b] = rgbForEnforcerState(st, paletteLinearRgb)
+    // state 0 (NONE / unassigned) means "inherit base material" = filament slot 1.
+    // Only remap when a palette is present; without one, fall back to neutral grey.
+    const effectiveSt = st === 0 && paletteLinearRgb ? 1 : st
+    const [r, g, b] = rgbForEnforcerState(effectiveSt, paletteLinearRgb)
     out[t * 3] = r
     out[t * 3 + 1] = g
     out[t * 3 + 2] = b

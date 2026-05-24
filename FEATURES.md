@@ -12,7 +12,7 @@ AI coding assistant (Claude Code, Cursor, etc.) working on this project.
 |---|---|
 | Desktop shell | Electron 33 |
 | Frontend | React 18 + TypeScript 5 |
-| 3D rendering | Babylon.js 7 |
+| 3D rendering | React Three Fiber (Three.js r184) |
 | CAD kernel | occt-import-js (WASM) |
 | 3MF / ZIP | jszip + fast-xml-parser |
 | Build | electron-vite + Vite 5 |
@@ -28,11 +28,11 @@ src/preload/index.ts           — contextBridge API surface (renderer ↔ main)
 src/renderer/src/App.tsx       — Root React component, all UI state
 src/renderer/src/styles.css    — All styles (dark theme, CSS variables)
 src/renderer/src/viewer/
-  BabylonViewer.tsx            — Babylon.js canvas, camera, mesh rendering
+  R3FViewer.tsx                — React Three Fiber canvas, camera, mesh rendering, overlays
   cameraPrefs.ts               — localStorage camera preset persistence
 src/renderer/src/loaders/
   index.ts                     — Format dispatcher (reads file extension)
-  babylonFormats.ts            — STL / OBJ via Babylon.js loaders
+  threeFormats.ts              — STL / OBJ via Three.js loaders
   threeMf.ts                   — Full 3MF parser (ZIP + XML + Bambu/Orca metadata)
   threeMfColors.ts             — Filament colour extraction
   threeMfBambuPaint.ts         — Triangle-level paint metadata
@@ -45,14 +45,13 @@ src/renderer/src/exporters/
 src/renderer/src/mesh/
   types.ts                     — TriangleMesh, ThreeMfPackageMeta, etc.
   analyze.ts                   — Bounds, surface area, volume, print readiness
-  fromBabylon.ts               — Babylon mesh → TriangleMesh
-  toBabylon.ts                 — TriangleMesh → Babylon mesh
+  toThree.ts                   — TriangleMesh → THREE.BufferGeometry (shared helper)
   merge.ts                     — Mesh merging
+  openEdges.ts                 — Open boundary edge detection
   rotateAroundY.ts             — Quarter-turn rotation utilities (X, Y, Z)
   printSpace.ts                — Coordinate system transforms
-  repair.ts                    — Degenerate triangle removal
 src/renderer/src/repair/
-  meshRepair.ts                — Mesh repair orchestration
+  meshRepair.ts                — Mesh repair orchestration (weld, degenerate removal, color-preserving)
 ```
 
 ---
@@ -72,7 +71,7 @@ src/renderer/src/repair/
 ## Implemented Features
 
 ### Viewing
-- [x] Real-time Babylon.js 3D viewer with orbit camera
+- [x] Real-time React Three Fiber viewer with orbit camera (drei OrbitControls)
 - [x] View modes: Solid, Wireframe, X-ray (look-through)
 - [x] Camera presets: Quick / Default (wheel + pan speed, persisted)
 - [x] Reset view (default 3/4 front-left perspective)
@@ -169,7 +168,7 @@ src/renderer/src/repair/
 - WASM tessellation (STEP) **cannot be interrupted mid-call** — cancel takes effect between phases.
 - `sandbox: false` is set in Electron for the renderer; this is required for certain preload APIs but is a mild security trade-off.
 - Thin parts (<5mm) receive a non-geometric Y-scale boost in the viewer for visibility; this does not affect exported geometry.
-- Mixed-winding meshes render with `backFaceCulling: false` (both sides visible); this is cosmetic.
+- Mixed-winding meshes render with `THREE.DoubleSide` (both sides visible); this is cosmetic.
 - "Open in default slicer" opens the **original source file**, not the current in-memory state. Export first if you've applied transforms or repairs.
 - Export to STEP is not possible — STEP encodes CAD topology, not triangle meshes. Use STL or 3MF for slicers.
 
@@ -178,12 +177,15 @@ src/renderer/src/repair/
 ## Architecture Notes (for AI assistants)
 
 - **IPC pattern**: all Electron main-process operations go through `src/preload/index.ts` (`contextBridge`). Never call `ipcRenderer` directly from renderer components.
-- **Mesh pipeline**: files are decoded into a `TriangleMesh` (see `mesh/types.ts`). Babylon.js is only used for display; all export/analysis operates on `TriangleMesh` directly.
-- **State**: all React state lives in `App.tsx`. `BabylonViewer` exposes an imperative handle (`BabylonViewerHandle`) for camera operations.
+- **Mesh pipeline**: files are decoded into a `TriangleMesh` (see `mesh/types.ts`). Three.js / R3F is only used for display; all export/analysis operates on `TriangleMesh` directly.
+- **State**: all React state lives in `App.tsx`. `R3FViewer` exposes an imperative handle (`ViewerHandle`) for camera operations (`resetDefaultView`, `focusCameraOnPlate`, `captureScreenshot`).
 - **plateParts**: when a multi-plate 3MF is loaded, `mesh.plateParts` holds per-plate geometry. The top-level `mesh.positions/indices` is a merged copy used for export and analysis.
-- **Coordinate system**: Babylon.js uses left-handed Y-up. Print space is right-handed Z-up. `mesh/printSpace.ts` handles the remap on load.
-- **Babylon picking**: `scene.pick()` is a no-op stub without a side-effect import. Do NOT use `import '@babylonjs/core/Culling/ray'` — it patches `Scene`/`Camera` prototypes and causes circular-dep crashes in Vite dev mode. Instead import `Pick` from `@babylonjs/core/Culling/ray.core` and call `Pick(scene, x, y, predicate)` directly. A predicate bypasses `isPickable` entirely.
+- **Coordinate system**: Three.js uses right-handed Y-up. Print space is right-handed Z-up. `mesh/printSpace.ts` handles the remap on load: `viewer_x = slicer_x`, `viewer_y = slicer_z`, `viewer_z = -slicer_y`.
+- **Three.js matrix update semantics**: `obj.updateMatrixWorld(true)` updates obj AND descendants DOWNWARD — does NOT update ancestors. `obj.updateWorldMatrix(true, false)` walks UP through the parent chain first, then updates obj. Always use `updateWorldMatrix(true, false)` before calling `Box3.setFromObject(obj)` when `obj` has not been rendered yet (Box3 only calls `updateWorldMatrix(false, false)` internally — no parent traversal).
+- **R3F viewer scene**: `ViewerScene` component (renders inside `<Canvas>`) uses `useEffect` with `[mesh, loadAnimSeq]` to rebuild the scene on new loads. Bed groups are tracked in `bedGroupsRef`. Plate groups in `plateGroupsRef`. Eye-space lighting follows camera in `useFrame`.
+- **Picking (measure mode)**: uses `THREE.Raycaster` with `pointerdown`/`pointerup` events on the canvas. No Babylon scene.pick().
 - **occt-import-js**: must be in `optimizeDeps.include` (not `exclude`) in `electron.vite.config.ts`. It is a CJS/UMD module; exclusion causes Vite to serve it as raw ESM with no default export, crashing the renderer. esbuild handles the JS wrapper fine — the WASM binary is loaded dynamically at runtime and is not touched by the pre-bundler.
+- **STL / OBJ loading**: via `threeFormats.ts` using Three.js `STLLoader` / `OBJLoader` (no Babylon dependency).
 
 ---
 
@@ -191,6 +193,8 @@ src/renderer/src/repair/
 
 | Version | Date | Highlights |
 |---|---|---|
+| 2.0.0-alpha.1 | 2026-05-22 | Renderer rewrite: Babylon.js → React Three Fiber (Three.js r184). Multi-plate bed-plane camera. TypeScript clean. Vertex-color-preserving repair. X/Z rotation propagates plateParts. |
+| 1.0.0-beta.11 | 2026-05-20 | NOAMS multi-color 3MF support, sRGB color accuracy fix |
 | 1.0.0-beta.10 | 2026-05-08 | Measurement tool (click-to-pick, yellow overlay, mm distance), open boundary edge detection (orange overlay, Print Readiness count) |
 | 1.0.0-beta.9 | 2026-05-08 | Keyboard shortcuts panel, X/Z rotation buttons, open-in-slicer, recent files sidebar, filament slot labels |
 | 1.0.0-beta.8 | 2026-04-25 | Camera presets (Quick/Default), multi-plate UI polish, OPC ancestor propagation |

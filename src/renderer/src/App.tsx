@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { R3FViewer, type ViewerHandle, type ViewMode } from './viewer/R3FViewer'
+import { R3FViewer, type ViewerHandle, type ViewMode, type SnapView, type MaterialPreset, type Annotation } from './viewer/R3FViewer'
 import {
   readStoredCameraPresetId,
   writeStoredCameraPresetId,
@@ -88,7 +88,7 @@ function statusClass(s: string): string {
   return ''
 }
 
-const idleStatusMessage = 'Open an STL, OBJ, 3MF, or STEP file to begin.'
+const idleStatusMessage = 'Open a model to begin. Formats: STL OBJ 3MF GLB GLTF AMF PLY FBX STEP/STP'
 
 type RecentFile = { path: string; name: string; timestamp: number }
 
@@ -192,6 +192,20 @@ function ShortcutsModal({ onClose }: { onClose: () => void }): JSX.Element {
             <tr><td className="sc-key">L</td><td>Look-through (X-ray) view</td></tr>
             <tr><td className="sc-key">R</td><td>Reset camera</td></tr>
             <tr><td className="sc-key">P</td><td>Save screenshot</td></tr>
+            <tr><td className="sc-key">F</td><td>Toggle face orientation overlay</td></tr>
+            <tr><td className="sc-key">H</td><td>Toggle overhang heat map</td></tr>
+            <tr><td className="sc-key">T</td><td>Toggle turntable (auto-rotate)</td></tr>
+            <tr><td className="sc-key">M</td><td>Toggle measure mode</td></tr>
+            <tr><td className="sc-key">E</td><td>Toggle open edge highlight</td></tr>
+            <tr><td className="sc-key">Ctrl+Z</td><td>Undo mesh transform</td></tr>
+            <tr><td className="sc-key">Ctrl+Y</td><td>Redo mesh transform</td></tr>
+            <tr><td className="sc-key">Ctrl+K</td><td>Open command palette</td></tr>
+            <tr><td className="sc-key">1</td><td>Snap to Front view</td></tr>
+            <tr><td className="sc-key">2</td><td>Snap to Back view</td></tr>
+            <tr><td className="sc-key">3</td><td>Snap to Left view</td></tr>
+            <tr><td className="sc-key">4</td><td>Snap to Right view</td></tr>
+            <tr><td className="sc-key">5</td><td>Snap to Top view</td></tr>
+            <tr><td className="sc-key">6</td><td>Snap to Bottom view</td></tr>
             <tr><td className="sc-key">?</td><td>Show this panel</td></tr>
             <tr><td className="sc-key">Esc</td><td>Cancel load / close dialog</td></tr>
           </tbody>
@@ -204,9 +218,211 @@ function ShortcutsModal({ onClose }: { onClose: () => void }): JSX.Element {
   )
 }
 
+// ─── Command palette ──────────────────────────────────────────────────────────
+interface Command {
+  id: string
+  label: string
+  description?: string
+  run: () => void
+  disabled?: boolean
+}
+
+function CommandPalette({ commands, onClose }: { commands: Command[]; onClose: () => void }): JSX.Element {
+  const [query, setQuery] = useState('')
+  const [activeIdx, setActiveIdx] = useState(0)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase().trim()
+    if (!q) return commands
+    return commands.filter((c) =>
+      c.label.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false)
+    )
+  }, [query, commands])
+
+  // Reset cursor when result list changes
+  useEffect(() => { setActiveIdx(0) }, [filtered.length])
+
+  const run = useCallback((cmd: Command): void => {
+    if (cmd.disabled) return
+    onClose()
+    cmd.run()
+  }, [onClose])
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="cmd-palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="cmd-palette-header">
+          <span className="cmd-palette-hint">⌘K</span>
+          <input
+            ref={inputRef}
+            className="cmd-palette-input"
+            type="text"
+            placeholder="Type a command…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, filtered.length - 1)) }
+              else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, 0)) }
+              else if (e.key === 'Enter') {
+                const cmd = filtered[activeIdx]
+                if (cmd && !cmd.disabled) run(cmd)
+              }
+              else if (e.key === 'Escape') { e.preventDefault(); onClose() }
+            }}
+          />
+        </div>
+        <ul className="cmd-palette-list" role="listbox">
+          {filtered.length === 0 ? (
+            <li className="cmd-palette-empty">No matching commands</li>
+          ) : (
+            filtered.map((cmd, i) => (
+              <li
+                key={cmd.id}
+                className={`cmd-palette-item${i === activeIdx ? ' active' : ''}${cmd.disabled ? ' disabled' : ''}`}
+                role="option"
+                aria-selected={i === activeIdx}
+                onMouseEnter={() => setActiveIdx(i)}
+                onPointerDown={(e) => { e.preventDefault(); if (!cmd.disabled) run(cmd) }}
+              >
+                <span className="cmd-palette-label">{cmd.label}</span>
+                {cmd.description ? <span className="cmd-palette-desc">{cmd.description}</span> : null}
+              </li>
+            ))
+          )}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Returns g/cm³ for a filament type label (case-insensitive, prefix-matched).
+ * Falls back to PLA density when type is unrecognised or absent.
+ */
+function filamentDensity(filamentTypes: string[] | undefined): { densityGcm3: number; label: string } {
+  const raw = (filamentTypes?.[0] ?? '').toUpperCase().trim()
+  if (/^(ASA|ABS)/.test(raw)) return { densityGcm3: 1.05, label: raw || 'ASA/ABS' }
+  if (/^PA/.test(raw) || /^NYLON/.test(raw)) return { densityGcm3: 1.10, label: raw || 'PA/Nylon' }
+  if (/^(TPU|TPE)/.test(raw)) return { densityGcm3: 1.21, label: raw || 'TPU/TPE' }
+  if (/^PC/.test(raw)) return { densityGcm3: 1.20, label: raw || 'PC' }
+  if (/^PETG/.test(raw)) return { densityGcm3: 1.27, label: raw || 'PETG' }
+  // PLA / PLA+ / unknown → PLA default
+  return { densityGcm3: 1.24, label: raw || 'PLA' }
+}
+
+/** Translate the mesh so its lowest vertex sits exactly at Y = 0 (on the bed). */
+function snapMeshToBed(mesh: TriangleMesh): TriangleMesh {
+  const p = mesh.positions
+  let minY = Infinity
+  for (let i = 1; i < p.length; i += 3) minY = Math.min(minY, p[i]!)
+  if (!Number.isFinite(minY) || Math.abs(minY) < 0.001) return mesh
+  const positions = p.slice()
+  for (let i = 1; i < positions.length; i += 3) (positions[i] as number) -= minY
+  const plateParts = mesh.plateParts?.map((pp) => ({
+    ...pp,
+    mesh: snapMeshToBed(pp.mesh),
+  }))
+  return { ...mesh, positions, ...(plateParts ? { plateParts } : {}) }
+}
+
+/**
+ * Score an orientation for print quality.  Lower = better.
+ *
+ * The key insight: a large flat base sitting ON the bed has many triangles
+ * with downward normals at Y_min — those are NOT overhangs; the bed supports them.
+ * We therefore split downward-facing triangles into two buckets:
+ *   • bed-contact (centroid ≤ Y_min + bedZone) → reward these (subtract from score)
+ *   • true overhangs (centroid above bedZone)   → penalise these (add to score)
+ *
+ * Result: a flat-base-down orientation wins because the huge flat base becomes a
+ * large bonus instead of a large penalty.
+ */
+function computeOverhangScore(mesh: TriangleMesh): number {
+  const p = mesh.positions
+  const ix = mesh.indices
+  // Find Y extents to set the bed-contact zone height.
+  let minY = Infinity, maxY = -Infinity
+  for (let i = 1; i < p.length; i += 3) {
+    const y = p[i]!
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+  const height = maxY - minY
+  // Anything whose centroid is within this distance of Y_min is "on the bed".
+  // 1 % of height, clamped to [0.5 mm, 5 mm].
+  const bedZone = Math.max(0.5, Math.min(5, height * 0.01))
+
+  let overhangs = 0   // penalised
+  let bedContact = 0  // rewarded
+  for (let i = 0; i < ix.length; i += 3) {
+    const i0 = ix[i]! * 3, i1 = ix[i + 1]! * 3, i2 = ix[i + 2]! * 3
+    const ax = p[i1]! - p[i0]!,   ay = p[i1 + 1]! - p[i0 + 1]!, az = p[i1 + 2]! - p[i0 + 2]!
+    const bx = p[i2]! - p[i0]!,   by = p[i2 + 1]! - p[i0 + 1]!, bz = p[i2 + 2]! - p[i0 + 2]!
+    const nx = ay * bz - az * by
+    const ny = az * bx - ax * bz
+    const nz = ax * by - ay * bx
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz)
+    if (len < 1e-10) continue
+    if (-ny / len > 0.707) {
+      const cy = (p[i0 + 1]! + p[i1 + 1]! + p[i2 + 1]!) / 3
+      if (cy <= minY + bedZone) bedContact++
+      else                      overhangs++
+    }
+  }
+  // Small weight on bedContact so it acts as a tiebreaker without swamping overhangs.
+  return overhangs - bedContact * 0.5
+}
+
+/** Try 6 canonical face-down orientations; return the one with the fewest overhang triangles. */
+function autoOrientMesh(mesh: TriangleMesh): { mesh: TriangleMesh; bestIdx: number } {
+  const rx = rotateMeshQuarterTurnAroundX
+  const rz = rotateMeshQuarterTurnAroundZ
+  const candidates: TriangleMesh[] = [
+    mesh,
+    rx(mesh),
+    rx(rx(mesh)),
+    rx(rx(rx(mesh))),
+    rz(mesh),
+    rz(rz(rz(mesh))),
+  ]
+  const scores = candidates.map(computeOverhangScore)
+  const best = scores.indexOf(Math.min(...scores))
+  return { mesh: candidates[best]!, bestIdx: best }
+}
+
+/** Scale every position in a TriangleMesh by a uniform factor; preserves plateParts. */
+function scaleMesh(mesh: TriangleMesh, factor: number): TriangleMesh {
+  const positions = mesh.positions.slice()
+  for (let i = 0; i < positions.length; i++) positions[i] *= factor
+  const plateParts = mesh.plateParts?.map((p) => ({
+    ...p,
+    mesh: scaleMesh(p.mesh, factor),
+  }))
+  return { ...mesh, positions, ...(plateParts ? { plateParts } : {}) }
+}
+
+function extractPlateMesh(mesh: TriangleMesh, plateId: number): TriangleMesh | null {
+  const part = mesh.plateParts?.find((p) => p.plateId === plateId)
+  return part?.mesh ?? null
+}
+
 function isSupportedModelFilename(name: string): boolean {
   const ext = extensionOf(name)
-  return ext === 'stl' || ext === 'obj' || ext === '3mf' || ext === 'step' || ext === 'stp'
+  return (
+    ext === 'stl' || ext === 'obj' || ext === '3mf' ||
+    ext === 'step' || ext === 'stp' ||
+    ext === 'glb' || ext === 'gltf' || ext === 'amf' ||
+    ext === 'ply'  || ext === 'fbx'
+  )
 }
 
 function ThreeMfBuildObjectsList({
@@ -324,7 +540,32 @@ export function App(): JSX.Element {
     ptA: [number, number, number]
     ptB: [number, number, number]
   } | null>(null)
-  const exportDropdownRef = useRef<HTMLDivElement>(null)
+  /** Section / clip Y — null means no clip; number is Y height in mm (world space). */
+  const [clipY, setClipY] = useState<number | null>(null)
+  const [showCoM, setShowCoM] = useState(false)
+  /** Scale target input string, e.g. "100" mm along the chosen axis. */
+  const [scaleInput, setScaleInput] = useState('')
+  const [scaleAxis, setScaleAxis] = useState<'x' | 'y' | 'z' | 'uniform'>('uniform')
+  /** Which sidebar sections are collapsed (set of section ids). */
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('mf-theme') as 'dark' | 'light') ?? 'dark')
+  const [sidebarVisible, setSidebarVisible] = useState(true)
+  const [explodedView, setExplodedView] = useState(false)
+  const [swatchCopied, setSwatchCopied] = useState<number | null>(null)
+  const [turntable, setTurntable] = useState(false)
+  const [materialPreset, setMaterialPreset] = useState<MaterialPreset>('default')
+  const [annotationMode, setAnnotationMode] = useState(false)
+  const [annotations, setAnnotations] = useState<Annotation[]>([])
+  const [pendingAnnotationPos, setPendingAnnotationPos] = useState<[number, number, number] | null>(null)
+  const [pendingAnnotationText, setPendingAnnotationText] = useState('')
+  const nextAnnotationId = useRef(1)
+  const [meshHistory, setMeshHistory] = useState<TriangleMesh[]>([])
+  const [meshFuture, setMeshFuture] = useState<TriangleMesh[]>([])
+  const meshRef = useRef<TriangleMesh | null>(null)
+  const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false)
+  const exportDropdownRef   = useRef<HTMLDivElement>(null)
+  const snapViewDropdownRef = useRef<HTMLDivElement>(null)
+  const [snapViewMenuOpen, setSnapViewMenuOpen] = useState(false)
   const viewerRef = useRef<ViewerHandle>(null)
   /** Avoid consuming startup path twice (React Strict Mode remount). */
   const startupOpenHandled = useRef(false)
@@ -332,6 +573,8 @@ export function App(): JSX.Element {
   const loadCancelledRef = useRef(false)
 
   const stats = useMemo(() => (mesh ? meshStats(mesh) : null), [mesh])
+  // Keep meshRef in sync so applyMeshOp / undo / redo can read current mesh in callbacks
+  meshRef.current = mesh
   const [repairReport, setRepairReport] = useState<string[] | null>(null)
   const meshAnalysis = useMemo(() => (mesh ? analyzeMesh(mesh) : null), [mesh])
   const repairImpact = useMemo(() => (mesh ? repairImpactReport(mesh) : null), [mesh])
@@ -339,6 +582,13 @@ export function App(): JSX.Element {
     if (!meshAnalysis || repairImpact === null) return []
     return printReadinessLines(meshAnalysis, repairImpact.removedDegenerate)
   }, [meshAnalysis, repairImpact])
+
+  // Persist theme to localStorage
+  useEffect(() => { localStorage.setItem('mf-theme', theme) }, [theme])
+
+  const hasSubObjects = Boolean(
+    mesh?.plateParts?.some((p) => p.subObjects && p.subObjects.length >= 2)
+  )
 
   const showPlateOverviewControls = Boolean(
     mesh &&
@@ -359,12 +609,14 @@ export function App(): JSX.Element {
       setMeasureMode(false)
       setMeasureResult(null)
       setRepairReport(null)
+      setExplodedView(false)
     } else {
       // Clear stale overlays whenever the mesh object changes (repair/rotate/new load)
       setShowOpenEdges(false)
       setOpenEdgeResult(null)
       setMeasureMode(false)
       setMeasureResult(null)
+      setExplodedView(false)
     }
   }, [mesh])
 
@@ -410,6 +662,21 @@ export function App(): JSX.Element {
   }, [exportMenuOpen])
 
   useEffect(() => {
+    if (!snapViewMenuOpen) return
+    const onPointerDown = (e: PointerEvent): void => {
+      const root = snapViewDropdownRef.current
+      if (root && !root.contains(e.target as Node)) setSnapViewMenuOpen(false)
+    }
+    const onKeyDown = (e: KeyboardEvent): void => { if (e.key === 'Escape') setSnapViewMenuOpen(false) }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [snapViewMenuOpen])
+
+  useEffect(() => {
     if (!aboutOpen) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') setAboutOpen(false)
@@ -433,12 +700,29 @@ export function App(): JSX.Element {
       setLoadPhase(phase)
       setStatus(phase)
     }
-    const loaded = await loadModelFromBuffer(label, data, onProgress, stepTessellationParams(stepTessPreset))
+    let loaded = await loadModelFromBuffer(label, data, onProgress, stepTessellationParams(stepTessPreset))
     if (loadCancelledRef.current) {
       setStatus('Load cancelled.')
       return
     }
+    // Auto-orient non-3MF files so the flat base sits on the print bed.
+    // 3MF files are already correctly oriented by the slicer and must not be rotated.
+    const is3mf = label.toLowerCase().endsWith('.3mf')
+    if (!is3mf && loaded.positions.length > 0) {
+      const { mesh: oriented } = autoOrientMesh(loaded)
+      loaded = oriented
+    }
     setFocusedPlateId(null)
+    setShowOpenEdges(false)
+    setOpenEdgeResult(null)
+    setMeasureMode(false)
+    setMeasureResult(null)
+    setMeshHistory([])
+    setMeshFuture([])
+    setAnnotations([])
+    setAnnotationMode(false)
+    setTurntable(false)
+    setMaterialPreset('default')
     setMesh(loaded)
     setLoadAnimSeq((n) => n + 1)
     const short = label.split(/[/\\]/).pop() ?? label
@@ -501,7 +785,7 @@ export function App(): JSX.Element {
   const loadDroppedFile = useCallback(
     async (file: File) => {
       if (!isSupportedModelFilename(file.name)) {
-        setStatus('Unsupported file type. Use STL, OBJ, 3MF, or STEP/STP.')
+        setStatus('Unsupported file type. Supported: STL OBJ 3MF GLB GLTF AMF PLY FBX STEP/STP')
         return
       }
       try {
@@ -550,6 +834,16 @@ export function App(): JSX.Element {
     setExportMenuOpen(false)
     setViewMode('solid')
     setFocusedPlateId(null)
+    setShowOpenEdges(false)
+    setOpenEdgeResult(null)
+    setMeasureMode(false)
+    setMeasureResult(null)
+    setMeshHistory([])
+    setMeshFuture([])
+    setAnnotations([])
+    setAnnotationMode(false)
+    setTurntable(false)
+    setMaterialPreset('default')
     setStatus(idleStatusMessage)
   }, [])
 
@@ -561,20 +855,76 @@ export function App(): JSX.Element {
     setFocusedPlateId(null)
     setExportMenuOpen(false)
     setViewMode('solid')
+    setShowOpenEdges(false)
+    setOpenEdgeResult(null)
+    setMeasureMode(false)
+    setMeasureResult(null)
+    setMeshHistory([])
+    setMeshFuture([])
+    setAnnotations([])
+    setAnnotationMode(false)
+    setTurntable(false)
+    setMaterialPreset('default')
     await openFile()
   }, [openFile])
+
+  /** Apply a mesh transform: push current mesh to history, clear redo stack, set new mesh. */
+  const applyMeshOp = useCallback((newMesh: TriangleMesh) => {
+    const prev = meshRef.current
+    if (prev) {
+      setMeshHistory((h) => {
+        const next = [...h, prev]
+        return next.length > 10 ? next.slice(-10) : next
+      })
+    }
+    setMeshFuture([])
+    setMesh(newMesh)
+  }, [])
+
+  const undo = useCallback(() => {
+    setMeshHistory((h) => {
+      if (h.length === 0) return h
+      const prev = h[h.length - 1]!
+      const remaining = h.slice(0, -1)
+      const curr = meshRef.current
+      if (curr) setMeshFuture((f) => [...f, curr])
+      setMesh(prev)
+      setStatus('Undo.')
+      return remaining
+    })
+  }, [])
+
+  const redo = useCallback(() => {
+    setMeshFuture((f) => {
+      if (f.length === 0) return f
+      const next = f[f.length - 1]!
+      const remaining = f.slice(0, -1)
+      const curr = meshRef.current
+      if (curr) setMeshHistory((h) => {
+        const nx = [...h, curr]
+        return nx.length > 10 ? nx.slice(-10) : nx
+      })
+      setMesh(next)
+      setStatus('Redo.')
+      return remaining
+    })
+  }, [])
 
   const runRepair = useCallback(() => {
     if (!mesh) return
     const { mesh: fixed, report } = repairMesh(mesh)
     setFocusedPlateId(null)
-    setMesh(fixed)
+    setShowOpenEdges(false)
+    setOpenEdgeResult(null)
+    setMeasureMode(false)
+    setMeasureResult(null)
+    applyMeshOp(fixed)
     setRepairReport([
       `Degenerate triangles removed: ${report.removedDegenerate.toLocaleString()}`,
       `Vertices: ${report.verticesBefore.toLocaleString()} → ${report.verticesAfter.toLocaleString()}`,
     ])
     setStatus(`Repaired — ${report.removedDegenerate} degenerate triangles removed.`)
-  }, [mesh])
+  }, [mesh, applyMeshOp])
 
   const exportAs = useCallback(
     async (kind: 'stl' | 'obj' | '3mf') => {
@@ -603,6 +953,31 @@ export function App(): JSX.Element {
     [mesh]
   )
 
+  const exportPlateAs = useCallback(
+    async (kind: 'stl' | 'obj') => {
+      if (!mesh || focusedPlateId === null) return
+      const plateMesh = extractPlateMesh(mesh, focusedPlateId)
+      if (!plateMesh) { setStatus(`No geometry for plate ${focusedPlateId}.`); return }
+      setExportMenuOpen(false)
+      setBusy(true)
+      try {
+        const path = await window.api.saveFileDialog(kind)
+        if (!path) { setStatus('Export cancelled.'); return }
+        let body: Uint8Array
+        if (kind === 'stl') body = encodeBinaryStl(plateMesh)
+        else body = new TextEncoder().encode(encodeObj(plateMesh, `plate_${focusedPlateId}`))
+        await window.api.writeFile(path, body)
+        setStatus(`Exported plate ${focusedPlateId} as ${kind.toUpperCase()}.`)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        setStatus(`Export error: ${msg}`)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [mesh, focusedPlateId]
+  )
+
   const stepExportInfo = useCallback(() => {
     setExportMenuOpen(false)
     setStatus(
@@ -615,23 +990,44 @@ export function App(): JSX.Element {
     viewerRef.current?.resetDefaultView()
   }, [])
 
+  const snapView = useCallback((view: SnapView) => {
+    setSnapViewMenuOpen(false)
+    viewerRef.current?.snapCameraToView(view)
+  }, [])
+
+  const snapToBed = useCallback(() => {
+    if (!mesh) return
+    setShowOpenEdges(false); setOpenEdgeResult(null)
+    setMeasureMode(false);   setMeasureResult(null)
+    const snapped = snapMeshToBed(mesh)
+    if (snapped === mesh) { setStatus('Model is already on the bed.'); return }
+    applyMeshOp(snapped)
+    setStatus('Snapped to bed.')
+  }, [mesh, applyMeshOp])
+
   const rotateAroundBedY = useCallback(() => {
     if (!mesh) return
-    setMesh(rotateMeshQuarterTurnAroundY(mesh))
+    setShowOpenEdges(false); setOpenEdgeResult(null)
+    setMeasureMode(false);   setMeasureResult(null)
+    applyMeshOp(rotateMeshQuarterTurnAroundY(mesh))
     setStatus('Rotated 90° around the bed (Y). Export uses this orientation.')
-  }, [mesh])
+  }, [mesh, applyMeshOp])
 
   const rotateAroundX = useCallback(() => {
     if (!mesh) return
-    setMesh(rotateMeshQuarterTurnAroundX(mesh))
+    setShowOpenEdges(false); setOpenEdgeResult(null)
+    setMeasureMode(false);   setMeasureResult(null)
+    applyMeshOp(rotateMeshQuarterTurnAroundX(mesh))
     setStatus('Rotated 90° around X. Export uses this orientation.')
-  }, [mesh])
+  }, [mesh, applyMeshOp])
 
   const rotateAroundZ = useCallback(() => {
     if (!mesh) return
-    setMesh(rotateMeshQuarterTurnAroundZ(mesh))
+    setShowOpenEdges(false); setOpenEdgeResult(null)
+    setMeasureMode(false);   setMeasureResult(null)
+    applyMeshOp(rotateMeshQuarterTurnAroundZ(mesh))
     setStatus('Rotated 90° around Z. Export uses this orientation.')
-  }, [mesh])
+  }, [mesh, applyMeshOp])
 
   const openInSlicer = useCallback(async () => {
     if (!filePath) return
@@ -683,6 +1079,73 @@ export function App(): JSX.Element {
     })
   }, [])
 
+  const runAutoOrient = useCallback(() => {
+    if (!mesh) return
+    setShowOpenEdges(false); setOpenEdgeResult(null)
+    setMeasureMode(false);   setMeasureResult(null)
+    const { mesh: oriented, bestIdx } = autoOrientMesh(mesh)
+    if (bestIdx === 0) { setStatus('Auto-orient: already in optimal orientation.'); return }
+    applyMeshOp(oriented)
+    const labels = ['identity', 'X+90°', 'X+180°', 'X-90°', 'Z+90°', 'Z-90°']
+    setStatus(`Auto-orient: applied ${labels[bestIdx] ?? 'rotation'} to minimise overhangs.`)
+  }, [mesh, applyMeshOp])
+
+  const batchExportPlates = useCallback(async () => {
+    if (!mesh?.plateParts || mesh.plateParts.length === 0) return
+    setExportMenuOpen(false)
+    setBusy(true)
+    try {
+      const path = await window.api.saveFileDialog('stl')
+      if (!path) { setStatus('Batch export cancelled.'); return }
+      const basePath = path.replace(/\.[^.]+$/, '')
+      let exported = 0
+      for (const part of mesh.plateParts) {
+        const platePath = `${basePath}_plate${part.plateId}.stl`
+        const body = encodeBinaryStl(part.mesh)
+        await window.api.writeFile(platePath, body)
+        exported++
+      }
+      setStatus(`Batch export done: ${exported} plate${exported === 1 ? '' : 's'} saved as STL.`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Batch export error: ${msg}`)
+    } finally {
+      setBusy(false)
+    }
+  }, [mesh])
+
+  const handleAnnotationPlace = useCallback((pos: [number, number, number]) => {
+    setPendingAnnotationPos(pos)
+    setPendingAnnotationText('')
+  }, [])
+
+  const toggleSection = useCallback((id: string) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+
+  const applyScale = useCallback(() => {
+    if (!mesh || !meshAnalysis) return
+    const target = parseFloat(scaleInput)
+    if (!Number.isFinite(target) || target <= 0) {
+      setStatus('Enter a positive number (mm) to scale to.')
+      return
+    }
+    const [dx, dy, dz] = meshAnalysis.bounds.size
+    let current: number
+    if      (scaleAxis === 'x') current = dx
+    else if (scaleAxis === 'y') current = dy
+    else if (scaleAxis === 'z') current = dz
+    else current = Math.max(dx, dy, dz)
+    if (!Number.isFinite(current) || current <= 0) { setStatus('Cannot compute current size.'); return }
+    const factor = target / current
+    applyMeshOp(scaleMesh(mesh, factor))
+    setStatus(`Scaled ×${factor.toFixed(4)} → ${target} mm${scaleAxis !== 'uniform' ? ` (${scaleAxis.toUpperCase()})` : ''}.`)
+  }, [mesh, meshAnalysis, scaleInput, scaleAxis, applyMeshOp])
+
   const saveScreenshot = useCallback(async () => {
     if (!mesh) return
     const dataUrl = viewerRef.current?.captureScreenshot()
@@ -712,8 +1175,15 @@ export function App(): JSX.Element {
 
   // Placed after all useCallback declarations to avoid temporal dead zone errors.
   useEffect(() => {
-    const anyModalOpen = aboutOpen || shortcutsOpen || exportMenuOpen
+    const anyModalOpen = aboutOpen || shortcutsOpen || exportMenuOpen || cmdPaletteOpen
     const onKey = (e: KeyboardEvent): void => {
+      // Ctrl/Cmd combos: handled before modal/busy guards (some work even with modals)
+      if (!busy && (e.ctrlKey || e.metaKey)) {
+        if (e.key === 'k') { e.preventDefault(); if (!anyModalOpen) setCmdPaletteOpen(true); return }
+        if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); if (!anyModalOpen) undo(); return }
+        if (e.key === 'z' && e.shiftKey)  { e.preventDefault(); if (!anyModalOpen) redo(); return }
+        if (e.key === 'y')                { e.preventDefault(); if (!anyModalOpen) redo(); return }
+      }
       if (busy || anyModalOpen) return
       const tag = (e.target as HTMLElement | null)?.tagName ?? ''
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
@@ -725,15 +1195,67 @@ export function App(): JSX.Element {
         case 'l': case 'L': if (mesh) setViewMode('xray'); break
         case 'r': case 'R': if (mesh) resetView(); break
         case 'p': case 'P': if (mesh) void saveScreenshot(); break
+        case '1': if (mesh) snapView('front');  break
+        case '2': if (mesh) snapView('back');   break
+        case '3': if (mesh) snapView('left');   break
+        case '4': if (mesh) snapView('right');  break
+        case '5': if (mesh) snapView('top');    break
+        case '6': if (mesh) snapView('bottom'); break
+        case 'm': case 'M': if (mesh) toggleMeasureMode(); break
+        case 'e': case 'E': if (mesh) toggleOpenEdges(); break
+        case 'f': case 'F': if (mesh) setViewMode((v) => v === 'faceOrient' ? 'solid' : 'faceOrient'); break
+        case 'h': case 'H': if (mesh) setViewMode((v) => v === 'overhang' ? 'solid' : 'overhang'); break
+        case 't': case 'T': if (mesh) setTurntable((v) => !v); break
       }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [busy, aboutOpen, shortcutsOpen, exportMenuOpen, mesh, openFile, resetView, saveScreenshot])
+  }, [busy, aboutOpen, shortcutsOpen, exportMenuOpen, cmdPaletteOpen, mesh, openFile, resetView, saveScreenshot, snapView, toggleMeasureMode, toggleOpenEdges, undo, redo])
+
+  const commands = useMemo<Command[]>(() => [
+    { id: 'open',        label: 'Open model…',                  run: () => void openFile() },
+    { id: 'close',       label: 'Close model',                  run: closeModel,                    disabled: !mesh },
+    { id: 'new',         label: 'New model…',                   run: () => void openNewModel(),     disabled: !mesh },
+    { id: 'undo',        label: `Undo${meshHistory.length ? ` (${meshHistory.length})` : ''}`, run: undo, disabled: meshHistory.length === 0 },
+    { id: 'redo',        label: `Redo${meshFuture.length ? ` (${meshFuture.length})` : ''}`,  run: redo, disabled: meshFuture.length === 0 },
+    { id: 'repair',      label: 'Repair mesh',                  description: 'Remove degenerate triangles and weld vertices', run: runRepair,       disabled: !mesh },
+    { id: 'snap-bed',    label: 'Snap to bed',                  description: 'Move lowest vertex to Y=0',                    run: snapToBed,       disabled: !mesh },
+    { id: 'auto-orient', label: 'Auto-orient',                  description: 'Rotate to minimise overhang triangles',        run: runAutoOrient,   disabled: !mesh },
+    { id: 'rotate-y',    label: 'Rotate 90° Y',                 run: rotateAroundBedY,  disabled: !mesh },
+    { id: 'rotate-x',    label: 'Rotate 90° X',                 run: rotateAroundX,     disabled: !mesh },
+    { id: 'rotate-z',    label: 'Rotate 90° Z',                 run: rotateAroundZ,     disabled: !mesh },
+    { id: 'view-solid',  label: 'View: Solid (S)',               run: () => setViewMode('solid'),       disabled: !mesh },
+    { id: 'view-wire',   label: 'View: Wireframe (W)',           run: () => setViewMode('wireframe'),   disabled: !mesh },
+    { id: 'view-xray',   label: 'View: Look-through (L)',        run: () => setViewMode('xray'),        disabled: !mesh },
+    { id: 'view-face',   label: 'View: Face orientation (F)',    run: () => setViewMode('faceOrient'),  disabled: !mesh },
+    { id: 'view-ohang',  label: 'View: Overhang heat map (H)',   run: () => setViewMode('overhang'),    disabled: !mesh },
+    { id: 'mat-default', label: 'Material: Default',            run: () => setMaterialPreset('default'), disabled: !mesh },
+    { id: 'mat-silk',    label: 'Material: Silk (glossy)',       run: () => setMaterialPreset('silk'),    disabled: !mesh },
+    { id: 'mat-matte',   label: 'Material: Matte (flat)',        run: () => setMaterialPreset('matte'),   disabled: !mesh },
+    { id: 'mat-metal',   label: 'Material: Metallic',            run: () => setMaterialPreset('metal'),   disabled: !mesh },
+    { id: 'turntable',   label: turntable ? 'Turntable: Stop (T)' : 'Turntable: Start (T)', run: () => setTurntable((v) => !v), disabled: !mesh },
+    { id: 'annotate',    label: annotationMode ? 'Annotations: Stop placing' : 'Annotations: Place mode', run: () => setAnnotationMode((v) => !v), disabled: !mesh },
+    { id: 'clear-ann',   label: 'Clear all annotations',        run: () => { setAnnotations([]); setStatus('Annotations cleared.') }, disabled: annotations.length === 0 },
+    { id: 'screenshot',  label: 'Save screenshot (P)',           run: () => void saveScreenshot(),    disabled: !mesh },
+    { id: 'open-edges',  label: showOpenEdges ? 'Open edges: Hide (E)' : 'Open edges: Show (E)', run: toggleOpenEdges, disabled: !mesh },
+    { id: 'measure',     label: measureMode ? 'Measure mode: Off (M)' : 'Measure mode: On (M)', run: toggleMeasureMode, disabled: !mesh },
+    { id: 'reset-view',  label: 'Reset camera (R)',              run: resetView,                      disabled: !mesh },
+    { id: 'open-slicer', label: 'Open in slicer',               run: () => void openInSlicer(),      disabled: !filePath },
+    { id: 'export-stl',  label: 'Export STL',                   run: () => void exportAs('stl'),     disabled: !mesh },
+    { id: 'export-obj',  label: 'Export OBJ',                   run: () => void exportAs('obj'),     disabled: !mesh },
+    { id: 'export-3mf',  label: 'Export 3MF',                   run: () => void exportAs('3mf'),     disabled: !mesh },
+    { id: 'batch-export',label: 'Batch export all plates as STL', run: () => void batchExportPlates(), disabled: !mesh?.plateParts || mesh.plateParts.length < 2 },
+    { id: 'shortcuts',   label: 'Keyboard shortcuts (?)',         run: () => setShortcutsOpen(true) },
+    { id: 'settings',    label: 'Settings (⚙)',                   run: () => setSettingsOpen(true) },
+  ], [mesh, meshHistory.length, meshFuture.length, turntable, annotationMode, annotations.length, measureMode, showOpenEdges, filePath,
+      openFile, closeModel, openNewModel, undo, redo, runRepair, snapToBed, runAutoOrient,
+      rotateAroundBedY, rotateAroundX, rotateAroundZ, saveScreenshot, toggleOpenEdges,
+      toggleMeasureMode, resetView, openInSlicer, exportAs, batchExportPlates])
 
   return (
     <div
       className={`app${viewerDragActive ? ' file-drag' : ''}`}
+      data-theme={theme}
       onDragEnter={(e) => {
         if (e.dataTransfer.types?.includes('Files')) {
           e.preventDefault()
@@ -794,16 +1316,21 @@ export function App(): JSX.Element {
           {/* ── View / Scene / Cam ── */}
           <div className="seg">
             <span className="seg-label">View</span>
-            {(['solid', 'wireframe', 'xray'] as const).map((m) => (
+            {(['solid', 'wireframe', 'xray', 'faceOrient', 'overhang'] as const).map((m) => (
               <button
                 key={m}
                 type="button"
                 className={viewMode === m ? 'btn active' : 'btn'}
                 onClick={() => setViewMode(m)}
                 disabled={!mesh}
-                title={!mesh ? 'Open a model first' : undefined}
+                title={
+                  !mesh ? 'Open a model first'
+                  : m === 'faceOrient' ? 'Colour front faces blue and back faces red — spot inverted normals (F)'
+                  : m === 'overhang'   ? 'Heat-map faces by overhang angle: green ≤ 45° / yellow / red > 45° (H)'
+                  : undefined
+                }
               >
-                {m === 'solid' ? 'Solid' : m === 'wireframe' ? 'Wireframe' : 'Look-through'}
+                {m === 'solid' ? 'Solid' : m === 'wireframe' ? 'Wireframe' : m === 'xray' ? 'Look-through' : m === 'faceOrient' ? 'Face orient' : 'Overhang'}
               </button>
             ))}
           </div>
@@ -813,6 +1340,27 @@ export function App(): JSX.Element {
               title={!mesh ? 'Open a model first' : 'Restore default camera angle and zoom (R)'}>
               Reset view
             </button>
+            <div className={`dropdown${snapViewMenuOpen ? ' open' : ''}`} ref={snapViewDropdownRef}>
+              <button
+                type="button"
+                className="btn"
+                disabled={!mesh || busy}
+                aria-expanded={snapViewMenuOpen}
+                aria-haspopup="menu"
+                title={!mesh ? 'Open a model first' : 'Snap to a standard orthographic view (keys 1–6)'}
+                onClick={() => setSnapViewMenuOpen((o) => !o)}
+              >
+                Views ▾
+              </button>
+              <div className="dropdown-menu" role="menu">
+                <button type="button" role="menuitem" onClick={() => snapView('front')}>Front (1)</button>
+                <button type="button" role="menuitem" onClick={() => snapView('back')}>Back (2)</button>
+                <button type="button" role="menuitem" onClick={() => snapView('left')}>Left (3)</button>
+                <button type="button" role="menuitem" onClick={() => snapView('right')}>Right (4)</button>
+                <button type="button" role="menuitem" onClick={() => snapView('top')}>Top (5)</button>
+                <button type="button" role="menuitem" onClick={() => snapView('bottom')}>Bottom (6)</button>
+              </div>
+            </div>
             {showPlateOverviewControls && focusedPlateId !== null ? (
               <button
                 type="button"
@@ -835,6 +1383,23 @@ export function App(): JSX.Element {
             <button type="button" className="btn" onClick={rotateAroundZ} disabled={!mesh || busy}
               title={!mesh ? 'Open a model first' : 'Rotate 90° around Z (roll left/right)'}>
               ↻Z
+            </button>
+            <button type="button" className="btn" onClick={snapToBed} disabled={!mesh || busy}
+              title={!mesh ? 'Open a model first' : 'Translate the mesh so its lowest vertex sits exactly on the build plate (Y = 0)'}>
+              Snap to bed
+            </button>
+            <button type="button" className="btn" onClick={runAutoOrient} disabled={!mesh || busy}
+              title={!mesh ? 'Open a model first' : 'Try 6 face-down orientations and pick the one with the fewest overhang triangles'}>
+              Auto-orient
+            </button>
+            <button
+              type="button"
+              className={turntable ? 'btn active' : 'btn'}
+              onClick={() => setTurntable((v) => !v)}
+              disabled={!mesh || busy}
+              title={!mesh ? 'Open a model first' : 'Auto-rotate the model in the viewer (T)'}
+            >
+              Turntable
             </button>
           </div>
           <div className="seg">
@@ -905,9 +1470,68 @@ export function App(): JSX.Element {
             </button>
           ) : null}
 
+          {hasSubObjects ? (
+            <button
+              type="button"
+              className={explodedView ? 'btn active' : 'btn'}
+              onClick={() => setExplodedView((v) => !v)}
+              disabled={busy}
+              title="Fan sub-objects outward to inspect a multi-body model"
+            >
+              Explode
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={annotationMode ? 'btn active' : 'btn'}
+            onClick={() => setAnnotationMode((v) => !v)}
+            disabled={!mesh || busy}
+            title={!mesh ? 'Open a model first' : 'Click the model surface to place text annotation pins'}
+          >
+            Annotate
+          </button>
+          <button
+            type="button"
+            className="btn btn-icon"
+            onClick={undo}
+            disabled={meshHistory.length === 0 || busy}
+            title={meshHistory.length === 0 ? 'Nothing to undo' : `Undo (Ctrl+Z) — ${meshHistory.length} step${meshHistory.length === 1 ? '' : 's'}`}
+            aria-label="Undo"
+          >
+            ⟲
+          </button>
+          <button
+            type="button"
+            className="btn btn-icon"
+            onClick={redo}
+            disabled={meshFuture.length === 0 || busy}
+            title={meshFuture.length === 0 ? 'Nothing to redo' : `Redo (Ctrl+Y) — ${meshFuture.length} step${meshFuture.length === 1 ? '' : 's'}`}
+            aria-label="Redo"
+          >
+            ⟳
+          </button>
+
           <div className="toolbar-sep" aria-hidden />
 
           {/* ── Help / Settings / Export ── */}
+          <button
+            type="button"
+            className="btn btn-icon"
+            onClick={() => setSidebarVisible((v) => !v)}
+            title={sidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
+            aria-label={sidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
+          >
+            {sidebarVisible ? '▶' : '◀'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-icon"
+            onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            aria-label="Toggle theme"
+          >
+            {theme === 'dark' ? '☀' : '🌙'}
+          </button>
           <button
             type="button"
             className="btn"
@@ -943,7 +1567,7 @@ export function App(): JSX.Element {
                 STL (binary)
               </button>
               <button type="button" role="menuitem" onClick={() => void exportAs('obj')}>
-                OBJ
+                OBJ{mesh?.vertexColors?.length ? ' + vertex colours' : ''}
               </button>
               <button type="button" role="menuitem" onClick={() => void exportAs('3mf')}>
                 3MF
@@ -951,11 +1575,30 @@ export function App(): JSX.Element {
               <button type="button" role="menuitem" className="muted" onClick={stepExportInfo}>
                 STEP (info)
               </button>
+              {mesh?.plateParts && mesh.plateParts.length >= 2 ? (
+                <>
+                  <div className="dropdown-divider" role="separator" aria-hidden />
+                  <button type="button" role="menuitem" onClick={() => void batchExportPlates()}>
+                    All plates — STL (batch)
+                  </button>
+                </>
+              ) : null}
+              {focusedPlateId !== null && mesh?.plateParts?.some((p) => p.plateId === focusedPlateId) ? (
+                <>
+                  <div className="dropdown-divider" role="separator" aria-hidden />
+                  <button type="button" role="menuitem" onClick={() => void exportPlateAs('stl')}>
+                    Plate {focusedPlateId} — STL
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => void exportPlateAs('obj')}>
+                    Plate {focusedPlateId} — OBJ
+                  </button>
+                </>
+              ) : null}
             </div>
           </div>
         </div>
       </header>
-      <main className="main">
+      <main className={`main${sidebarVisible ? '' : ' sidebar-hidden'}`}>
         <div className="viewer-wrap">
           <R3FViewer
             ref={viewerRef}
@@ -966,205 +1609,533 @@ export function App(): JSX.Element {
             openEdgeLinePositions={showOpenEdges ? openEdgeResult?.linePositions ?? null : null}
             measureMode={measureMode}
             onMeasureResult={handleMeasureResult}
+            clipY={clipY}
+            showCoM={showCoM}
+            explodedView={explodedView}
+            turntable={turntable}
+            materialPreset={materialPreset}
+            annotationMode={annotationMode}
+            annotations={annotations}
+            onAnnotationPlace={handleAnnotationPlace}
           />
+
+          {/* ── Stats chip ─────────────────────────────────────────────── */}
+          {mesh && stats ? (
+            <div className="viewport-stats">
+              {fileLabel ? <span className="vs-name">{fileLabel}</span> : null}
+              {fileLabel ? <span className="vs-sep" aria-hidden /> : null}
+              <span className="vs-chip">{stats.triangles} tri</span>
+              {mesh.packageMeta?.plateCount != null && mesh.packageMeta.plateCount > 1 ? (
+                <span className="vs-chip">{mesh.packageMeta.plateCount} plates</span>
+              ) : null}
+              {mesh.packageMeta?.processHints?.estimatedPrintTime ? (
+                <span className="vs-chip">⏱ {mesh.packageMeta.processHints.estimatedPrintTime}</span>
+              ) : null}
+              {mesh.packageMeta?.processHints?.estimatedModelWeight ? (
+                <span className="vs-chip">{mesh.packageMeta.processHints.estimatedModelWeight}</span>
+              ) : null}
+            </div>
+          ) : null}
+
+          {/* ── Explode HUD label ──────────────────────────────────────── */}
+          {explodedView ? <div className="explode-hud">Exploded view</div> : null}
+
+
           {!mesh && (
             <div className="empty-overlay">
-              <h1>Open a print mesh to preview it on the plate</h1>
-              <p>Orbit with the mouse: left drag rotates, wheel zooms, right drag pans.</p>
-              <p className="hint">
-                Drop a file here or use Open · Formats: STL, OBJ, 3MF, STEP/STP · First STEP load may take a moment (CAD
-                kernel).
-              </p>
+              <div className="empty-drop-zone">
+                <span className="empty-icon" aria-hidden>⬡</span>
+                <h1>Drop a model or click Open</h1>
+                <p className="hint">
+                  STL · OBJ · 3MF · GLB/GLTF · AMF · PLY · FBX · STEP/STP<br />
+                  Orbit: left drag · Zoom: wheel · Pan: right drag
+                </p>
+              </div>
             </div>
           )}
         </div>
         <aside className="side">
+          {/* ── Current file — always visible ─────────────────────────────── */}
           <section>
             <h2>Current file</h2>
             <p className="mono">{fileLabel ?? '—'}</p>
           </section>
+
+          {/* ── Recent files — collapsible ────────────────────────────────── */}
           {recentFiles.length > 0 ? (
             <section>
               <div className="recent-files-header">
-                <h2>Recent files</h2>
-                <button
-                  type="button"
-                  className="recent-files-clear-btn"
-                  title="Clear recent files"
-                  onClick={() => {
-                    void window.api.clearRecentFiles().then(() => setRecentFiles([]))
-                  }}
+                <h2
+                  className="section-h"
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={!collapsedSections.has('recent')}
+                  onClick={() => toggleSection('recent')}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection('recent') } }}
                 >
-                  Clear
-                </button>
+                  Recent files
+                  <span className="section-chevron" aria-hidden>{collapsedSections.has('recent') ? '▸' : '▾'}</span>
+                </h2>
+                {!collapsedSections.has('recent') ? (
+                  <button
+                    type="button"
+                    className="recent-files-clear-btn"
+                    title="Clear recent files"
+                    onClick={() => { void window.api.clearRecentFiles().then(() => setRecentFiles([])) }}
+                  >
+                    Clear
+                  </button>
+                ) : null}
               </div>
-              <ul className="recent-files-list">
-                {recentFiles.slice(0, 5).map((f) => (
-                  <li key={f.path}>
-                    <button
-                      type="button"
-                      className={`recent-file-btn${f.path === filePath ? ' recent-file-btn--active' : ''}`}
-                      disabled={busy}
-                      title={f.path}
-                      onClick={() => void loadFileFromPath(f.path)}
-                    >
-                      <span className="recent-file-badge">{fileExtBadge(f.name)}</span>
-                      <span className="recent-file-name">{f.name}</span>
-                      <span className="recent-file-time">{formatTimestamp(f.timestamp)}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              {!collapsedSections.has('recent') ? (
+                <ul className="recent-files-list">
+                  {recentFiles.slice(0, 5).map((f) => (
+                    <li key={f.path}>
+                      <button
+                        type="button"
+                        className={`recent-file-btn${f.path === filePath ? ' recent-file-btn--active' : ''}`}
+                        disabled={busy}
+                        title={f.path}
+                        onClick={() => void loadFileFromPath(f.path)}
+                      >
+                        <span className="recent-file-badge">{fileExtBadge(f.name)}</span>
+                        <span className="recent-file-name">{f.name}</span>
+                        <span className="recent-file-time">{formatTimestamp(f.timestamp)}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </section>
           ) : null}
+
+          {/* ── Mesh — collapsible ────────────────────────────────────────── */}
           {stats ? (
             <section>
-              <h2>Mesh</h2>
-              <p className="side-line"><span className="side-k">Vertices</span> <span className="side-v mono">{stats.vertices}</span></p>
-              <p className="side-line"><span className="side-k">Triangles</span> <span className="side-v mono">{stats.triangles}</span></p>
-              <p className="side-line"><span className="side-k">Bounds (X×Y×Z)</span> <span className="side-v mono">{stats.bounds}</span></p>
-              {repairReport ? (
-                <div className="repair-card">
-                  {repairReport.map((r, i) => {
-                    const [label, val] = r.split(': ')
-                    return (
-                      <div key={i} className="repair-card-row">
-                        <span>{label}</span><span>{val}</span>
-                      </div>
-                    )
-                  })}
-                </div>
+              <h2
+                className="section-h"
+                role="button"
+                tabIndex={0}
+                aria-expanded={!collapsedSections.has('mesh')}
+                onClick={() => toggleSection('mesh')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection('mesh') } }}
+              >
+                Mesh
+                <span className="section-chevron" aria-hidden>{collapsedSections.has('mesh') ? '▸' : '▾'}</span>
+              </h2>
+              {!collapsedSections.has('mesh') ? (
+                <>
+                  <p className="side-line"><span className="side-k">Vertices</span> <span className="side-v mono">{stats.vertices}</span></p>
+                  <p className="side-line"><span className="side-k">Triangles</span> <span className="side-v mono">{stats.triangles}</span></p>
+                  <p className="side-line"><span className="side-k">Bounds (X×Y×Z)</span> <span className="side-v mono">{stats.bounds}</span></p>
+                  {repairReport ? (
+                    <div className="repair-card">
+                      {repairReport.map((r, i) => {
+                        const [label, val] = r.split(': ')
+                        return (
+                          <div key={i} className="repair-card-row">
+                            <span>{label}</span><span>{val}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : null}
+                </>
               ) : null}
             </section>
           ) : null}
+
+          {/* ── Slicer package (3MF) — collapsible ───────────────────────── */}
           {mesh?.packageMeta ? (
             <section>
-              <h2>Slicer package (3MF)</h2>
-              {mesh.packageMeta.projectName ? (
-                <p className="side-line">
-                  <span className="side-k">Project</span>{' '}
-                  <span className="side-v proj-meta">{mesh.packageMeta.projectName}</span>
-                </p>
+              <h2
+                className="section-h"
+                role="button"
+                tabIndex={0}
+                aria-expanded={!collapsedSections.has('pkg')}
+                onClick={() => toggleSection('pkg')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection('pkg') } }}
+              >
+                Slicer package (3MF)
+                <span className="section-chevron" aria-hidden>{collapsedSections.has('pkg') ? '▸' : '▾'}</span>
+              </h2>
+              {!collapsedSections.has('pkg') ? (
+                <>
+                  {mesh.packageMeta.projectName ? (
+                    <p className="side-line">
+                      <span className="side-k">Project</span>{' '}
+                      <span className="side-v proj-meta">{mesh.packageMeta.projectName}</span>
+                    </p>
+                  ) : null}
+                  {mesh.packageMeta.designer ? (
+                    <p className="side-line">
+                      <span className="side-k">Designer</span> <span className="side-v">{mesh.packageMeta.designer}</span>
+                    </p>
+                  ) : null}
+                  {mesh.packageMeta.bedType ? (
+                    <p className="side-line">
+                      <span className="side-k">Bed type</span> <span className="side-v">{mesh.packageMeta.bedType}</span>
+                    </p>
+                  ) : null}
+                  {mesh.packageMeta.printerModelId ? (
+                    <p className="side-line">
+                      <span className="side-k">Printer / preset</span>{' '}
+                      <span className="side-v mono">{mesh.packageMeta.printerModelId}</span>
+                    </p>
+                  ) : null}
+                  {mesh.packageMeta.bedWidthMm !== undefined && mesh.packageMeta.bedDepthMm !== undefined ? (
+                    <p className="side-line">
+                      <span className="side-k">Printable bed</span>{' '}
+                      <span className="side-v">
+                        {mesh.packageMeta.bedWidthMm} × {mesh.packageMeta.bedDepthMm} mm
+                      </span>
+                    </p>
+                  ) : null}
+                  <p className="side-line">
+                    <span className="side-k">Plates</span> <span className="side-v">{mesh.packageMeta.plateCount}</span>
+                  </p>
+                  {mesh.packageMeta.plateIds.length > 0 ? (
+                    <p className="side-note mono">Plate ids: {mesh.packageMeta.plateIds.join(', ')}</p>
+                  ) : null}
+                  <p className="side-line">
+                    <span className="side-k">Filament slots</span>{' '}
+                    <span className="side-v">{mesh.packageMeta.filamentCount}</span>
+                  </p>
+                  {mesh.packageMeta.plateThumbnailDataUrls?.length ? (
+                    <div className="plate-thumbs" aria-label="Plate preview thumbnails">
+                      {mesh.packageMeta.plateThumbnailDataUrls.map((url, i) => {
+                        const plateId = mesh.packageMeta?.plateIds?.[i]
+                        const canFocus = plateId !== undefined && mesh.plateParts && mesh.plateParts.length > 0
+                        return url ? (
+                          <button
+                            key={i}
+                            type="button"
+                            className={`plate-thumb-btn${plateId === focusedPlateId ? ' plate-thumb-btn--focused' : ''}`}
+                            disabled={!canFocus}
+                            title={plateId !== undefined ? `Plate ${plateId}` : undefined}
+                            onClick={() => {
+                              if (canFocus && plateId !== undefined) {
+                                viewerRef.current?.focusCameraOnPlate(plateId)
+                                setFocusedPlateId(plateId)
+                              }
+                            }}
+                          >
+                            <img src={url} alt={`Plate ${plateId ?? i + 1} preview`} className="plate-thumb-img" />
+                            {plateId !== undefined ? <span className="plate-thumb-label">Plate {plateId}</span> : null}
+                          </button>
+                        ) : null
+                      })}
+                    </div>
+                  ) : null}
+                  <div className="filament-swatches" aria-label="Filament colours from package">
+                    {mesh.packageMeta.filamentColorsHex.map((h, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="filament-swatch"
+                        title={`Slot ${i + 1}: ${mesh.packageMeta?.filamentTypes?.[i] ?? ''} ${h} — click to copy`.trim()}
+                        onClick={() => {
+                          void navigator.clipboard.writeText(h).then(() => {
+                            setSwatchCopied(i)
+                            setTimeout(() => setSwatchCopied((c) => (c === i ? null : c)), 1400)
+                          })
+                        }}
+                      >
+                        <span className="filament-swatch-dot" style={{ backgroundColor: h }} aria-hidden />
+                        <span className="filament-swatch-label">T{i + 1}</span>
+                        {swatchCopied === i ? <span className="swatch-copied-badge" aria-hidden>✓</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                  {mesh.packageMeta.filamentTypes?.length ? (
+                    <p className="side-note mono fil-type-line">{mesh.packageMeta.filamentTypes.join(' · ')}</p>
+                  ) : null}
+                  {mesh.packageMeta.buildObjects && mesh.packageMeta.buildObjects.length > 0 ? (
+                    <ThreeMfBuildObjectsList
+                      objects={mesh.packageMeta.buildObjects}
+                      focusedPlateId={focusedPlateId}
+                      onSelectPlate={
+                        mesh.plateParts &&
+                        mesh.plateParts.length > 0 &&
+                        (mesh.packageMeta.plateIds?.length ?? 0) > 1
+                          ? (plateId) => {
+                              viewerRef.current?.focusCameraOnPlate(plateId)
+                              setFocusedPlateId(plateId)
+                            }
+                          : undefined
+                      }
+                    />
+                  ) : null}
+                  {mesh.packageMeta.processHints ? (
+                    <ThreeMfProcessSnapshot hints={mesh.packageMeta.processHints} />
+                  ) : null}
+                  <p className="side-note">
+                    From Orca / Bambu `Metadata/model_settings.config`, `project_settings.config`, and OPC
+                    `3dmodel.model` metadata (title, designer, profile title).
+                  </p>
+                </>
               ) : null}
-              {mesh.packageMeta.designer ? (
-                <p className="side-line">
-                  <span className="side-k">Designer</span> <span className="side-v">{mesh.packageMeta.designer}</span>
-                </p>
-              ) : null}
-              {mesh.packageMeta.bedType ? (
-                <p className="side-line">
-                  <span className="side-k">Bed type</span> <span className="side-v">{mesh.packageMeta.bedType}</span>
-                </p>
-              ) : null}
-              {mesh.packageMeta.printerModelId ? (
-                <p className="side-line">
-                  <span className="side-k">Printer / preset</span>{' '}
-                  <span className="side-v mono">{mesh.packageMeta.printerModelId}</span>
-                </p>
-              ) : null}
-              {mesh.packageMeta.bedWidthMm !== undefined && mesh.packageMeta.bedDepthMm !== undefined ? (
-                <p className="side-line">
-                  <span className="side-k">Printable bed</span>{' '}
-                  <span className="side-v">
-                    {mesh.packageMeta.bedWidthMm} × {mesh.packageMeta.bedDepthMm} mm
-                  </span>
-                </p>
-              ) : null}
-              <p className="side-line">
-                <span className="side-k">Plates</span> <span className="side-v">{mesh.packageMeta.plateCount}</span>
-              </p>
-              {mesh.packageMeta.plateIds.length > 0 ? (
-                <p className="side-note mono">Plate ids: {mesh.packageMeta.plateIds.join(', ')}</p>
-              ) : null}
-              <p className="side-line">
-                <span className="side-k">Filament slots</span>{' '}
-                <span className="side-v">{mesh.packageMeta.filamentCount}</span>
-              </p>
-              <div className="filament-swatches" aria-label="Filament colours from package">
-                {mesh.packageMeta.filamentColorsHex.map((h, i) => (
-                  <span
-                    key={i}
-                    className="filament-swatch"
-                    title={`Slot ${i + 1}: ${mesh.packageMeta?.filamentTypes?.[i] ?? ''} ${h}`.trim()}
-                  >
-                    <span className="filament-swatch-dot" style={{ backgroundColor: h }} aria-hidden />
-                    <span className="filament-swatch-label">T{i + 1}</span>
-                  </span>
-                ))}
-              </div>
-              {mesh.packageMeta.filamentTypes?.length ? (
-                <p className="side-note mono fil-type-line">{mesh.packageMeta.filamentTypes.join(' · ')}</p>
-              ) : null}
-              {mesh.packageMeta.buildObjects && mesh.packageMeta.buildObjects.length > 0 ? (
-                <ThreeMfBuildObjectsList
-                  objects={mesh.packageMeta.buildObjects}
-                  focusedPlateId={focusedPlateId}
-                  onSelectPlate={
-                    mesh.plateParts &&
-                    mesh.plateParts.length > 0 &&
-                    (mesh.packageMeta.plateIds?.length ?? 0) > 1
-                      ? (plateId) => {
-                          viewerRef.current?.focusCameraOnPlate(plateId)
-                          setFocusedPlateId(plateId)
-                        }
-                      : undefined
-                  }
-                />
-              ) : null}
-              {mesh.packageMeta.processHints ? (
-                <ThreeMfProcessSnapshot hints={mesh.packageMeta.processHints} />
-              ) : null}
-              <p className="side-note">
-                From Orca / Bambu `Metadata/model_settings.config`, `project_settings.config`, and OPC
-                `3dmodel.model` metadata (title, designer, profile title).
-              </p>
             </section>
           ) : null}
-          {mesh ? (<section>
-            <h2>Measurements</h2>
-            {meshAnalysis ? (
-              <>
-                <p className="side-line">
-                  <span className="side-k">Size (ΔX × ΔY × ΔZ)</span>{' '}
-                  <span className="side-v">
-                    {meshAnalysis.bounds.size[0].toFixed(2)} × {meshAnalysis.bounds.size[1].toFixed(2)} ×{' '}
-                    {meshAnalysis.bounds.size[2].toFixed(2)} mm
-                  </span>
-                </p>
-                <p className="side-line">
-                  <span className="side-k">Diagonal</span> <span className="side-v">{meshAnalysis.bounds.diagonalMm.toFixed(2)} mm</span>
-                </p>
-                <p className="side-line">
-                  <span className="side-k">Surface area</span>{' '}
-                  <span className="side-v">{(meshAnalysis.surfaceAreaMm2 / 100).toFixed(1)} cm²</span>
-                </p>
-                <p className="side-line">
-                  <span className="side-k">Volume (signed)</span>{' '}
-                  <span className="side-v">{(Math.abs(meshAnalysis.signedVolumeMm3) / 1000).toFixed(2)} cm³</span>
-                </p>
-                <p className="side-note">Volume assumes a closed, consistently wound mesh; open shells are not reliable.</p>
-              </>
-            ) : null}
-          </section>) : null}
-          {mesh ? (<section>
-            <h2>Print readiness</h2>
-            {printLines.length > 0 ? (
-              <ul className="readiness-list">
-                {printLines.map((line, i) => (
-                  <li key={i} className={`readiness-${line.level}`}>
-                    {line.text}
-                  </li>
-                ))}
-                {openEdgeResult !== null ? (
-                  <li className={openEdgeResult.count === 0 ? 'readiness-ok' : 'readiness-warn'}>
-                    {openEdgeResult.count === 0
-                      ? 'No open edges — mesh appears watertight.'
-                      : `${openEdgeResult.count.toLocaleString()} open edge${openEdgeResult.count === 1 ? '' : 's'} detected (mesh not watertight).`}
-                  </li>
-                ) : null}
-              </ul>
-            ) : null}
-          </section>) : null}
+
+          {/* ── Measurements — collapsible ────────────────────────────────── */}
+          {mesh ? (
+            <section>
+              <h2
+                className="section-h"
+                role="button"
+                tabIndex={0}
+                aria-expanded={!collapsedSections.has('measurements')}
+                onClick={() => toggleSection('measurements')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection('measurements') } }}
+              >
+                Measurements
+                <span className="section-chevron" aria-hidden>{collapsedSections.has('measurements') ? '▸' : '▾'}</span>
+              </h2>
+              {!collapsedSections.has('measurements') && meshAnalysis ? (
+                <>
+                  <p className="side-line">
+                    <span className="side-k">Size (ΔX × ΔY × ΔZ)</span>{' '}
+                    <span className="side-v">
+                      {meshAnalysis.bounds.size[0].toFixed(2)} × {meshAnalysis.bounds.size[1].toFixed(2)} ×{' '}
+                      {meshAnalysis.bounds.size[2].toFixed(2)} mm
+                    </span>
+                  </p>
+                  <p className="side-line">
+                    <span className="side-k">Diagonal</span> <span className="side-v">{meshAnalysis.bounds.diagonalMm.toFixed(2)} mm</span>
+                  </p>
+                  <p className="side-line">
+                    <span className="side-k">Surface area</span>{' '}
+                    <span className="side-v">{(meshAnalysis.surfaceAreaMm2 / 100).toFixed(1)} cm²</span>
+                  </p>
+                  {(() => {
+                    const volCm3 = Math.abs(meshAnalysis.signedVolumeMm3) / 1000
+                    const { densityGcm3, label } = filamentDensity(mesh.packageMeta?.filamentTypes)
+                    const weightG = volCm3 * densityGcm3
+                    return (
+                      <>
+                        <p className="side-line">
+                          <span className="side-k">Volume (signed)</span>{' '}
+                          <span className="side-v">{volCm3.toFixed(2)} cm³</span>
+                        </p>
+                        <p className="side-line">
+                          <span className="side-k">Est. weight ({label})</span>{' '}
+                          <span className="side-v">{weightG.toFixed(1)} g</span>
+                        </p>
+                      </>
+                    )
+                  })()}
+                  <p className="side-line">
+                    <span className="side-k">Shells</span>{' '}
+                    <span className="side-v">{meshAnalysis.shellCount}</span>
+                  </p>
+                  <p className="side-line">
+                    <span className="side-k">Overhangs (&gt;45°)</span>{' '}
+                    <span className="side-v">
+                      {meshAnalysis.overhangTriangleCount.toLocaleString()} tri
+                      {meshAnalysis.triangleCount > 0
+                        ? ` (${((meshAnalysis.overhangTriangleCount / meshAnalysis.triangleCount) * 100).toFixed(1)}%)`
+                        : ''}
+                    </span>
+                  </p>
+                  <p className="side-note">Volume assumes a closed, consistently wound mesh. Weight is for solid 100% infill.</p>
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
+          {/* ── Print readiness — collapsible ─────────────────────────────── */}
+          {mesh ? (
+            <section>
+              <h2
+                className="section-h"
+                role="button"
+                tabIndex={0}
+                aria-expanded={!collapsedSections.has('readiness')}
+                onClick={() => toggleSection('readiness')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection('readiness') } }}
+              >
+                Print readiness
+                <span className="section-chevron" aria-hidden>{collapsedSections.has('readiness') ? '▸' : '▾'}</span>
+              </h2>
+              {!collapsedSections.has('readiness') && printLines.length > 0 ? (
+                <ul className="readiness-list">
+                  {printLines.map((line, i) => (
+                    <li key={i} className={`readiness-${line.level}`}>
+                      {line.text}
+                    </li>
+                  ))}
+                  {openEdgeResult !== null ? (
+                    <li className={openEdgeResult.count === 0 ? 'readiness-ok' : 'readiness-warn'}>
+                      {openEdgeResult.count === 0
+                        ? 'No open edges — mesh appears watertight.'
+                        : `${openEdgeResult.count.toLocaleString()} open edge${openEdgeResult.count === 1 ? '' : 's'} detected (mesh not watertight).`}
+                    </li>
+                  ) : null}
+                </ul>
+              ) : null}
+            </section>
+          ) : null}
+
+          {/* ── Analysis overlays — collapsible ───────────────────────────── */}
+          {mesh ? (
+            <section>
+              <h2
+                className="section-h"
+                role="button"
+                tabIndex={0}
+                aria-expanded={!collapsedSections.has('overlays')}
+                onClick={() => toggleSection('overlays')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection('overlays') } }}
+              >
+                Analysis overlays
+                <span className="section-chevron" aria-hidden>{collapsedSections.has('overlays') ? '▸' : '▾'}</span>
+              </h2>
+              {!collapsedSections.has('overlays') ? (
+                <>
+                  <div className="overlay-btns">
+                    <button
+                      type="button"
+                      className={viewMode === 'faceOrient' ? 'btn active' : 'btn'}
+                      onClick={() => setViewMode((v) => v === 'faceOrient' ? 'solid' : 'faceOrient')}
+                      title="Colour front faces blue and back faces red — spot inverted normals (F)"
+                    >
+                      Face orient
+                    </button>
+                    <button
+                      type="button"
+                      className={showCoM ? 'btn active' : 'btn'}
+                      onClick={() => setShowCoM((v) => !v)}
+                      title="Show the bounding-box centre of mass as an orange crosshair"
+                    >
+                      Centre of mass
+                    </button>
+                  </div>
+                  {meshAnalysis ? (
+                    <label className="side-field">
+                      <span className="side-field-label">
+                        Section plane{clipY === null ? ' (off)' : ` — ${clipY.toFixed(1)} mm`}
+                      </span>
+                      <div className="section-slider-row">
+                        <input
+                          type="range"
+                          min={meshAnalysis.bounds.min[1]}
+                          max={meshAnalysis.bounds.max[1]}
+                          step={0.5}
+                          value={clipY ?? meshAnalysis.bounds.max[1]}
+                          onChange={(e) => setClipY(parseFloat(e.target.value))}
+                        />
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => setClipY(null)}
+                          disabled={clipY === null}
+                          style={{ padding: '2px 7px', fontSize: '0.78rem', lineHeight: 1.4 }}
+                        >
+                          Off
+                        </button>
+                      </div>
+                      <p className="side-note">Drag to reveal a cross-section. Off restores the full model.</p>
+                    </label>
+                  ) : null}
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
+          {/* ── Shading — collapsible ────────────────────────────────────── */}
+          {mesh ? (
+            <section>
+              <h2
+                className="section-h"
+                role="button"
+                tabIndex={0}
+                aria-expanded={!collapsedSections.has('shading')}
+                onClick={() => toggleSection('shading')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection('shading') } }}
+              >
+                Shading
+                <span className="section-chevron" aria-hidden>{collapsedSections.has('shading') ? '▸' : '▾'}</span>
+              </h2>
+              {!collapsedSections.has('shading') ? (
+                <>
+                  <p className="side-note">Material appearance preset — adjusts surface roughness and metalness.</p>
+                  <div className="shading-presets">
+                    {(['default', 'silk', 'matte', 'metal'] as const).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        className={materialPreset === p ? 'btn active' : 'btn'}
+                        onClick={() => setMaterialPreset(p)}
+                        title={
+                          p === 'default' ? 'Balanced roughness (default PLA look)' :
+                          p === 'silk'    ? 'Low roughness, mild metalness — silk / satin finish' :
+                          p === 'matte'   ? 'Very high roughness, no metalness — flat/matte finish' :
+                                           'Low roughness, high metalness — metallic finish'
+                        }
+                      >
+                        {p === 'default' ? 'Default' : p === 'silk' ? 'Silk' : p === 'matte' ? 'Matte' : 'Metal'}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
+          {/* ── Scale — collapsible ───────────────────────────────────────── */}
+          {mesh ? (
+            <section>
+              <h2
+                className="section-h"
+                role="button"
+                tabIndex={0}
+                aria-expanded={!collapsedSections.has('scale')}
+                onClick={() => toggleSection('scale')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection('scale') } }}
+              >
+                Scale
+                <span className="section-chevron" aria-hidden>{collapsedSections.has('scale') ? '▸' : '▾'}</span>
+              </h2>
+              {!collapsedSections.has('scale') ? (
+                <>
+                  <div className="scale-row">
+                    <select
+                      className="scale-axis-select"
+                      value={scaleAxis}
+                      onChange={(e) => setScaleAxis(e.target.value as 'x' | 'y' | 'z' | 'uniform')}
+                      aria-label="Scale axis"
+                    >
+                      <option value="uniform">Uniform</option>
+                      <option value="x">X axis</option>
+                      <option value="y">Y axis</option>
+                      <option value="z">Z axis</option>
+                    </select>
+                    <input
+                      type="text"
+                      className="scale-input"
+                      placeholder="Target mm…"
+                      value={scaleInput}
+                      onChange={(e) => setScaleInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') applyScale() }}
+                      aria-label="Target size in millimetres"
+                    />
+                    <button type="button" className="btn primary" onClick={applyScale}>
+                      Apply
+                    </button>
+                  </div>
+                  {meshAnalysis ? (
+                    <p className="side-note">
+                      Current: {meshAnalysis.bounds.size[0].toFixed(1)} × {meshAnalysis.bounds.size[1].toFixed(1)} × {meshAnalysis.bounds.size[2].toFixed(1)} mm
+                    </p>
+                  ) : null}
+                  <p className="side-note">Enter a target size in mm and press Apply. Scales the entire mesh uniformly or along one axis.</p>
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
+          {/* ── Measurement result — always visible when present ──────────── */}
           {measureResult ? (
             <section>
               <h2>Measurement</h2>
@@ -1195,29 +2166,100 @@ export function App(): JSX.Element {
               </div>
             </section>
           ) : null}
-          <section>
-            <h2>STEP import</h2>
-            <label className="side-field">
-              <span className="side-field-label" id="step-tess-label">
-                Mesh quality
-              </span>
-              <select
-                className="side-select"
-                value={stepTessPreset}
-                onChange={(e) => setStepTessPreset(e.target.value as StepTessellationPreset)}
-                aria-labelledby="step-tess-label"
-                aria-describedby="step-tess-hint"
+
+          {/* ── Annotations — collapsible ────────────────────────────────── */}
+          {mesh && (annotations.length > 0 || annotationMode) ? (
+            <section>
+              <h2
+                className="section-h"
+                role="button"
+                tabIndex={0}
+                aria-expanded={!collapsedSections.has('annotations')}
+                onClick={() => toggleSection('annotations')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection('annotations') } }}
               >
-                <option value="auto">Auto (library default)</option>
-                <option value="coarse">Coarse — faster, fewer triangles</option>
-                <option value="balanced">Balanced</option>
-                <option value="fine">Fine — slower, smoother curves</option>
-              </select>
-            </label>
-            <p id="step-tess-hint" className="side-note">
-              {stepTessellationSummary(stepTessPreset)} Applies on the next .step / .stp load.
-            </p>
+                Annotations
+                <span className="section-chevron" aria-hidden>{collapsedSections.has('annotations') ? '▸' : '▾'}</span>
+              </h2>
+              {!collapsedSections.has('annotations') ? (
+                <>
+                  {annotationMode ? (
+                    <p className="side-note" style={{ color: 'var(--accent)' }}>Click the model to place a pin.</p>
+                  ) : null}
+                  {annotations.length === 0 ? (
+                    <p className="side-note">No annotations yet.</p>
+                  ) : (
+                    <ul className="annotation-list">
+                      {annotations.map((ann) => (
+                        <li key={ann.id} className="annotation-list-item">
+                          <span className="annotation-list-text">{ann.text}</span>
+                          <button
+                            type="button"
+                            className="annotation-list-del"
+                            title="Remove annotation"
+                            onClick={() => setAnnotations((prev) => prev.filter((a) => a.id !== ann.id))}
+                          >
+                            ✕
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {annotations.length > 0 ? (
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ marginTop: 4, width: '100%' }}
+                      onClick={() => { setAnnotations([]); setStatus('Annotations cleared.') }}
+                    >
+                      Clear all
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
+          {/* ── STEP import — collapsible ─────────────────────────────────── */}
+          <section>
+            <h2
+              className="section-h"
+              role="button"
+              tabIndex={0}
+              aria-expanded={!collapsedSections.has('step')}
+              onClick={() => toggleSection('step')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSection('step') } }}
+            >
+              STEP import
+              <span className="section-chevron" aria-hidden>{collapsedSections.has('step') ? '▸' : '▾'}</span>
+            </h2>
+            {!collapsedSections.has('step') ? (
+              <>
+                <label className="side-field">
+                  <span className="side-field-label" id="step-tess-label">
+                    Mesh quality
+                  </span>
+                  <select
+                    className="side-select"
+                    value={stepTessPreset}
+                    onChange={(e) => setStepTessPreset(e.target.value as StepTessellationPreset)}
+                    aria-labelledby="step-tess-label"
+                    aria-describedby="step-tess-hint"
+                  >
+                    <option value="auto">Auto (library default)</option>
+                    <option value="coarse">Coarse — faster, fewer triangles</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="fine">Fine — slower, smoother curves</option>
+                  </select>
+                </label>
+                <p id="step-tess-hint" className="side-note">
+                  {stepTessellationSummary(stepTessPreset)} Applies on the next .step / .stp load.
+                </p>
+              </>
+            ) : null}
           </section>
+
+          {/* ── Status — always visible ───────────────────────────────────── */}
           <section>
             <h2>Status</h2>
             <p className={`status${statusClass(status) ? ` status--${statusClass(status)}` : ''}`}>{status}</p>
@@ -1227,6 +2269,58 @@ export function App(): JSX.Element {
 
       {settingsOpen ? <SettingsModal onClose={() => setSettingsOpen(false)} /> : null}
       {shortcutsOpen ? <ShortcutsModal onClose={() => setShortcutsOpen(false)} /> : null}
+      {cmdPaletteOpen ? <CommandPalette commands={commands} onClose={() => setCmdPaletteOpen(false)} /> : null}
+
+      {/* ── Annotation text input dialog ──────────────────────────────── */}
+      {pendingAnnotationPos ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => { setPendingAnnotationPos(null); setPendingAnnotationText('') }}>
+          <div
+            className="modal-dialog annotation-input-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ann-dialog-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="ann-dialog-title">Add annotation</h2>
+            <input
+              className="settings-input"
+              type="text"
+              autoFocus
+              placeholder="Annotation text…"
+              value={pendingAnnotationText}
+              onChange={(e) => setPendingAnnotationText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && pendingAnnotationText.trim()) {
+                  setAnnotations((prev) => [...prev, { id: nextAnnotationId.current++, pos: pendingAnnotationPos, text: pendingAnnotationText.trim() }])
+                  setPendingAnnotationPos(null)
+                  setPendingAnnotationText('')
+                } else if (e.key === 'Escape') {
+                  setPendingAnnotationPos(null)
+                  setPendingAnnotationText('')
+                }
+              }}
+            />
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={() => { setPendingAnnotationPos(null); setPendingAnnotationText('') }}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={!pendingAnnotationText.trim()}
+                onClick={() => {
+                  if (!pendingAnnotationText.trim()) return
+                  setAnnotations((prev) => [...prev, { id: nextAnnotationId.current++, pos: pendingAnnotationPos, text: pendingAnnotationText.trim() }])
+                  setPendingAnnotationPos(null)
+                  setPendingAnnotationText('')
+                }}
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {aboutOpen ? (
         <div

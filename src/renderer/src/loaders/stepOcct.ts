@@ -48,7 +48,7 @@ function collectMeshIndices(node: OcctNode, out: number[]): void {
 function flattenOcctArray(arr: unknown): number[] {
   if (arr == null) return []
   if (ArrayBuffer.isView(arr)) {
-    return Array.from(arr as ArrayLike<number>)
+    return Array.from(arr as unknown as ArrayLike<number>)
   }
   if (!Array.isArray(arr) || arr.length === 0) return []
   if (typeof (arr as number[])[0] === 'number') return arr as number[]

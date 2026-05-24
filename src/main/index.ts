@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { readFile, writeFile } from 'fs/promises'
 import { exec } from 'child_process'
 
-const MODEL_EXT = new Set(['stl', 'obj', '3mf', 'step', 'stp'])
+const MODEL_EXT = new Set(['stl', 'obj', '3mf', 'step', 'stp', 'ply', 'fbx', 'glb', 'gltf', 'amf'])
 
 function extensionOf(filePath: string): string {
   const i = filePath.lastIndexOf('.')
@@ -242,7 +242,7 @@ if (!app.requestSingleInstanceLock()) {
         title: 'Open 3D model',
         properties: ['openFile'],
         filters: [
-          { name: '3D models', extensions: ['stl', 'obj', '3mf', 'step', 'stp'] },
+          { name: '3D models', extensions: ['stl', 'obj', '3mf', 'glb', 'gltf', 'amf', 'ply', 'fbx', 'step', 'stp'] },
           { name: 'All files', extensions: ['*'] }
         ]
       })

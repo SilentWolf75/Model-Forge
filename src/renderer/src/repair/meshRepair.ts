@@ -111,10 +111,12 @@ export function repairMesh(mesh: TriangleMesh, eps = 1e-4): { mesh: TriangleMesh
     }
   }
 
-  const p = mesh.positions
+  const p  = mesh.positions
+  const vc = mesh.vertexColors  // may be undefined; preserved first-wins during weld
   const ix = mesh.indices
   const keyToNew = new Map<string, number>()
   const newPos: number[] = []
+  const newVc: number[] | null = (vc && vc.length === p.length) ? [] : null
 
   const mapVertex = (vi: number): number => {
     const o = vi * 3
@@ -127,6 +129,8 @@ export function repairMesh(mesh: TriangleMesh, eps = 1e-4): { mesh: TriangleMesh
     const id = newPos.length / 3
     keyToNew.set(k, id)
     newPos.push(p[o], p[o + 1], p[o + 2])
+    // Carry color for first vertex that lands on this welded position (first-wins)
+    if (newVc && vc) newVc.push(vc[o], vc[o + 1], vc[o + 2])
     return id
   }
 
@@ -166,6 +170,7 @@ export function repairMesh(mesh: TriangleMesh, eps = 1e-4): { mesh: TriangleMesh
   const out: TriangleMesh = {
     positions: new Float32Array(newPos),
     indices: new Uint32Array(outIdx),
+    ...(newVc ? { vertexColors: new Float32Array(newVc) } : {}),
     ...(mesh.packageMeta ? { packageMeta: mesh.packageMeta } : {})
   }
   return {

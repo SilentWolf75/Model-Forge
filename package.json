@@ -1,6 +1,6 @@
 {
   "name": "model-forge-viewer-2",
-  "version": "2.0.0-alpha.1",
+  "version": "2.0.0-alpha.4",
   "description": "Desktop 3D model viewer and converter for 3D printing (STL, OBJ, 3MF, STEP) — v2 rewrite",
   "main": "out/main/index.js",
   "author": "",
@@ -16,9 +16,11 @@
   "dependencies": {
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
+    "@react-three/postprocessing": "^2.19.1",
     "fast-xml-parser": "^5.8.0",
     "jszip": "^3.10.1",
     "occt-import-js": "^0.0.23",
+    "postprocessing": "^6.39.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.184.0"

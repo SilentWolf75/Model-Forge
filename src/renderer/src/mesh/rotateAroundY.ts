@@ -74,7 +74,17 @@ export function rotateMeshQuarterTurnAroundY(mesh: TriangleMesh): TriangleMesh {
 /** +90° right-handed rotation about world X through the mesh bounding-box center. */
 export function rotateMeshQuarterTurnAroundX(mesh: TriangleMesh): TriangleMesh {
   const p = mesh.positions
-  if (p.length < 3) return cloneLike(mesh, new Float32Array(p))
+  if (p.length < 3) {
+    const base = cloneLike(mesh, new Float32Array(p))
+    if (!mesh.plateParts?.length) return base
+    return {
+      ...base,
+      plateParts: mesh.plateParts.map((pp) => ({
+        ...pp,
+        mesh: rotateMeshQuarterTurnAroundX(pp.mesh)
+      }))
+    }
+  }
   const { cx, cy, cz } = bboxCenter(p)
   const out = new Float32Array(p.length)
   for (let i = 0; i < p.length; i += 3) {
@@ -86,13 +96,31 @@ export function rotateMeshQuarterTurnAroundX(mesh: TriangleMesh): TriangleMesh {
     out[i + 1] = z + cy
     out[i + 2] = -y + cz
   }
-  return cloneLike(mesh, out)
+  const rotated = cloneLike(mesh, out)
+  if (!mesh.plateParts?.length) return rotated
+  return {
+    ...rotated,
+    plateParts: mesh.plateParts.map((pp) => ({
+      ...pp,
+      mesh: rotateMeshQuarterTurnAroundX(pp.mesh)
+    }))
+  }
 }
 
 /** +90° right-handed rotation about world Z through the mesh bounding-box center. */
 export function rotateMeshQuarterTurnAroundZ(mesh: TriangleMesh): TriangleMesh {
   const p = mesh.positions
-  if (p.length < 3) return cloneLike(mesh, new Float32Array(p))
+  if (p.length < 3) {
+    const base = cloneLike(mesh, new Float32Array(p))
+    if (!mesh.plateParts?.length) return base
+    return {
+      ...base,
+      plateParts: mesh.plateParts.map((pp) => ({
+        ...pp,
+        mesh: rotateMeshQuarterTurnAroundZ(pp.mesh)
+      }))
+    }
+  }
   const { cx, cy, cz } = bboxCenter(p)
   const out = new Float32Array(p.length)
   for (let i = 0; i < p.length; i += 3) {
@@ -104,5 +132,13 @@ export function rotateMeshQuarterTurnAroundZ(mesh: TriangleMesh): TriangleMesh {
     out[i + 1] = x + cy
     out[i + 2] = z + cz
   }
-  return cloneLike(mesh, out)
+  const rotated = cloneLike(mesh, out)
+  if (!mesh.plateParts?.length) return rotated
+  return {
+    ...rotated,
+    plateParts: mesh.plateParts.map((pp) => ({
+      ...pp,
+      mesh: rotateMeshQuarterTurnAroundZ(pp.mesh)
+    }))
+  }
 }

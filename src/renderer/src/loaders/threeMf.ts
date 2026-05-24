@@ -5,7 +5,8 @@ import type {
   ThreeMfPackageMeta,
   ThreeMfProcessHints,
   TriangleMesh,
-  TriangleMeshPlatePart
+  TriangleMeshPlatePart,
+  TriangleMeshPlateSubObject
 } from '../mesh/types'
 import { threeMfUnitToMmScale } from '../mesh/printSpace'
 import {
@@ -404,7 +405,14 @@ type GeomBucket = {
   idxChunks: Uint32Array[]
   colChunks: (Float32Array | null)[]
   vertexOffset: { value: number }
+  /** Per-build-item sub-buckets. Each entry is one `<build><item>` instance (including repeated
+   *  instances of the same objectid). Populated during collection to produce `subObjects` on the
+   *  finished `TriangleMeshPlatePart` so the viewer can render each object as a separate mesh.
+   *  Capped at MAX_ITEM_BUCKETS_PER_PLATE to avoid excessive draw-call counts for large plates. */
+  itemBuckets?: Array<{ extruderSlot: number; bucket: GeomBucket }>
 }
+
+const MAX_ITEM_BUCKETS_PER_PLATE = 50
 
 /**
  * Bambu `Metadata/slice_info.config`: per-sliced `<plate>` with `<metadata key="index" value="…"/>`
@@ -1396,9 +1404,42 @@ function mergeExtrudersFromTopLevelConfigObjects(xml: string, into: Map<string, 
   }
 }
 
+/**
+ * Bambu `model_settings.config`: extruder assignments nested as
+ *   `<object id="N"><part id="M"><metadata key="extruder" value="X"/></part></object>`
+ * where `part id` corresponds to the resource objectid in the sub-model file.
+ * Populates `into` with `"M:0" → X` so `collectDirectMeshes` extruder lookup resolves.
+ */
+function mergeExtrudersFromPartElementsInConfigObjects(xml: string, into: Map<string, number>): void {
+  const objRe = /<(?:[\w-]+:)?object\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?object\s*>/gi
+  let om: RegExpExecArray | null
+  while ((om = objRe.exec(xml)) !== null) {
+    const objInner = om[1] ?? ''
+    const partRe = /<(?:[\w-]+:)?part\b([^>]*?)>([\s\S]*?)<\/(?:[\w-]+:)?part\s*>/gi
+    let pm: RegExpExecArray | null
+    while ((pm = partRe.exec(objInner)) !== null) {
+      const partAttrs = pm[1] ?? ''
+      const partInner = pm[2] ?? ''
+      const idM = /\bid\s*=\s*["']([^"']+)["']/i.exec(partAttrs)
+      if (!idM || String(idM[1]).trim() === '') continue
+      const partId = String(idM[1]).trim()
+      const extM =
+        /<\s*metadata[^>]*\bkey\s*=\s*["']extruder["'][^>]*\bvalue\s*=\s*["']([^"']*)["']/i.exec(partInner) ??
+        /<\s*metadata[^>]*\bvalue\s*=\s*["']([^"']*)["'][^>]*\bkey\s*=\s*["']extruder["']/i.exec(partInner)
+      if (!extM || String(extM[1]).trim() === '') continue
+      const slot = Number(String(extM[1]).trim())
+      if (!Number.isFinite(slot) || slot < 1) continue
+      const key = oidInstMapKey(partId, 0)
+      if (!into.has(key)) into.set(key, Math.floor(slot))
+    }
+  }
+}
+
 function mergeExtruderSlotsFromModelSettingsXml(xml: string, into: Map<string, number>): void {
   // Bambu newer format: extruder on top-level <object> elements outside <plate>
   mergeExtrudersFromTopLevelConfigObjects(xml, into)
+  // Bambu format: extruder on nested <part id="N"> elements inside <object> blocks
+  mergeExtrudersFromPartElementsInConfigObjects(xml, into)
   // Bambu older format: extruder inside <model_instance> / <object> within <plate> blocks
   const plateRe = /<(?:[\w-]+:)?plate\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?plate\s*>/gi
   let plateMatch: RegExpExecArray | null
@@ -2080,7 +2121,7 @@ function inferDominantBuildPlateIdForModel(
   }
   if (ids.size > 1) return undefined
   const sole = [...ids][0]!
-  if (sole === 0 && expanded.size > 0) {
+  if (sole === 0 && expanded !== null && expanded.size > 0) {
     const anyNonZeroPlate = [...expanded.values()].some((v) => v !== 0)
     if (anyNonZeroPlate) return undefined
   }
@@ -2219,7 +2260,11 @@ function collectFromObjectId(
   buildItemPindex?: number,
   plateBucketsForRouting?: Map<number, GeomBucket>,
   plateAssignmentForRouting?: Map<string, number> | null,
-  buildInstIdxForRouting?: number
+  buildInstIdxForRouting?: number,
+  /** When set, each leaf mesh node appends a new entry here so the viewer can render
+   *  every component as a separate mesh (preserving piece separation from the slicer). */
+  itemBucketsOut?: Array<{ extruderSlot: number; bucket: GeomBucket }>,
+  extruderSlotForItem?: number
 ): void {
   if (stack.has(idStr)) return
   stack.add(idStr)
@@ -2254,6 +2299,18 @@ function collectFromObjectId(
       objectPid,
       objectPindex
     })
+    // Each leaf mesh becomes its own item bucket entry for per-piece rendering.
+    if (itemBucketsOut !== undefined && extruderSlotForItem !== undefined
+        && itemBucketsOut.length < MAX_ITEM_BUCKETS_PER_PLATE) {
+      const ib: GeomBucket = { posChunks: [], idxChunks: [], colChunks: [], vertexOffset: { value: 0 } }
+      itemBucketsOut.push({ extruderSlot: extruderSlotForItem, bucket: ib })
+      appendMesh(obj.mesh, world, ib, colorTables, filamentPaletteRgb, {
+        buildPid: buildItemPid,
+        buildPindex: buildItemPindex,
+        objectPid,
+        objectPindex
+      })
+    }
   }
 
   const comps = obj.components ?? (obj as { Components?: unknown }).Components
@@ -2289,7 +2346,9 @@ function collectFromObjectId(
       undefined,
       plateBucketsForRouting,
       plateAssignmentForRouting,
-      buildInstIdxForRouting
+      buildInstIdxForRouting,
+      itemBucketsOut,        // pass through so every leaf in this sub-tree is captured
+      extruderSlotForItem
     )
   }
   stack.delete(idStr)
@@ -2667,7 +2726,8 @@ function collectFromBuildAndResources(
   colorTables: Map<string, Float32Array> | null,
   filamentPaletteRgb: Float32Array | null,
   bambuAssemble: BambuAssembleComposeMap | null,
-  applyBambuAssembleToBuild: boolean
+  applyBambuAssembleToBuild: boolean,
+  extruderMap: Map<string, number> | null = null
 ): void {
   const buildRaw = model.build ?? (model as { Build?: unknown }).Build
   const b = unwrapXmlRecord(buildRaw)
@@ -2711,6 +2771,10 @@ function collectFromBuildAndResources(
       if (row) world = multiplyMat4(row, world)
     }
     const { pid: buildPid, pindex: buildPindex } = readPidPindexFromRow(item as Record<string, unknown>)
+    // Resolve extruder slot for this build item upfront so it can be forwarded to every
+    // leaf mesh node that is collected, enabling per-piece color rendering.
+    if (!bucket.itemBuckets) bucket.itemBuckets = []
+    const slot = extruderMap ? (lookupExtruderForOidInst(extruderMap, oidStr, instIdx) ?? 1) : 1
     collectFromObjectId(
       oidStr,
       world,
@@ -2723,7 +2787,9 @@ function collectFromBuildAndResources(
       buildPindex,
       plateBuckets,
       plateAssignment,
-      instIdx
+      instIdx,
+      bucket.itemBuckets,  // each leaf mesh appends its own entry here
+      slot
     )
   }
 }
@@ -2733,18 +2799,39 @@ function collectDirectMeshes(
   objects: Record<string, unknown>[],
   bucket: GeomBucket,
   colorTables: Map<string, Float32Array> | null,
-  filamentPaletteRgb: Float32Array | null
+  filamentPaletteRgb: Float32Array | null,
+  extruderMap: Map<string, number> | null = null,
+  objectWorldTransforms: Map<string, Float64Array> | null = null
 ): void {
-  const world = identityMat4()
+  if (!bucket.itemBuckets) bucket.itemBuckets = []
   for (const o of objects) {
     const node = o as ObjectNode
     const orec = o as Record<string, unknown>
     if (!isRenderableThreeMfObject(orec)) continue
     const { pid: objectPid, pindex: objectPindex } = readPidPindexFromRow(orec)
+    const oidStr = objectIdOf(orec)
+    // When per-object world transforms exist (multiple components sharing one sub-model file),
+    // apply the correct matrix for this object so each part lands at its slicer position.
+    const canonOid = oidStr ? canonical3mfObjectIdForKey(oidStr) : undefined
+    let world: Float64Array = identityMat4()
+    if (objectWorldTransforms && oidStr) {
+      const perObjTr =
+        objectWorldTransforms.get(oidStr) ??
+        (canonOid !== undefined && canonOid !== oidStr ? objectWorldTransforms.get(canonOid) : undefined)
+      if (perObjTr) world = perObjTr
+    }
     appendMesh(node.mesh, world, bucket, colorTables, filamentPaletteRgb, {
       objectPid,
       objectPindex
     })
+    // Track each renderable object as a separate item bucket so the viewer can render
+    // Bambu split-format sub-model files as distinct pieces per build object.
+    if (bucket.itemBuckets.length < MAX_ITEM_BUCKETS_PER_PLATE) {
+      const ib: GeomBucket = { posChunks: [], idxChunks: [], colChunks: [], vertexOffset: { value: 0 } }
+      const slot = oidStr && extruderMap ? (lookupExtruderForOidInst(extruderMap, oidStr, 0) ?? 1) : 1
+      bucket.itemBuckets.push({ extruderSlot: slot, bucket: ib })
+      appendMesh(node.mesh, world, ib, colorTables, filamentPaletteRgb, { objectPid, objectPindex })
+    }
   }
 }
 
@@ -2884,7 +2971,23 @@ function finalizeGeomBucketsToMesh(plateBuckets: Map<number, GeomBucket>): Trian
     const sub = mergeChunks(g.posChunks, g.idxChunks, g.colChunks)
     fixOneBasedIndices(sub)
     submeshes.push(sub)
-    plateParts.push({ plateId: pid, mesh: sub })
+
+    // Build per-object sub-meshes when this plate has multiple build-item instances.
+    // Each item becomes a separate TriangleMeshPlateSubObject so the viewer renders them
+    // as distinct THREE.Mesh objects (preserving piece positions from the slicer layout).
+    let subObjects: TriangleMeshPlateSubObject[] | undefined
+    if (g.itemBuckets && g.itemBuckets.length >= 2) {
+      const candidates: TriangleMeshPlateSubObject[] = []
+      for (const ib of g.itemBuckets) {
+        if (ib.bucket.posChunks.length === 0) continue
+        const soMesh = mergeChunks(ib.bucket.posChunks, ib.bucket.idxChunks, ib.bucket.colChunks)
+        fixOneBasedIndices(soMesh)
+        candidates.push({ mesh: soMesh, extruderSlot: ib.extruderSlot })
+      }
+      if (candidates.length >= 2) subObjects = candidates
+    }
+
+    plateParts.push({ plateId: pid, mesh: sub, ...(subObjects ? { subObjects } : {}) })
   }
   if (submeshes.length === 0) {
     return { positions: new Float32Array(0), indices: new Uint32Array(0) }
@@ -2892,6 +2995,11 @@ function finalizeGeomBucketsToMesh(plateBuckets: Map<number, GeomBucket>): Trian
   const merged = mergeTriangleMeshList(submeshes)
   fixOneBasedIndices(merged)
   if (plateParts.length > 1) {
+    return { ...merged, plateParts }
+  }
+  // Single-plate: still attach plateParts when there are sub-objects so the viewer
+  // can render each build-item instance as a separate mesh.
+  if (plateParts.length === 1 && plateParts[0]?.subObjects) {
     return { ...merged, plateParts }
   }
   return merged
@@ -2903,7 +3011,9 @@ function extractTriangleMeshFromParsedModel(
   filamentPaletteRgb: Float32Array | null,
   bambuAssemble: BambuAssembleComposeMap | null,
   applyBambuAssembleToBuild: boolean,
-  plateAssignment: Map<string, number> | null
+  plateAssignment: Map<string, number> | null,
+  extruderMap: Map<string, number> | null = null,
+  objectWorldTransforms: Map<string, Float64Array> | null = null
 ): TriangleMesh {
   const resourcesRaw = model.resources ?? (model as { Resources?: unknown }).Resources
   const resources = unwrapXmlRecord(resourcesRaw) as
@@ -2940,7 +3050,8 @@ function extractTriangleMeshFromParsedModel(
     colorLookup,
     filamentPaletteRgb,
     bambuAssemble,
-    applyBambuAssembleToBuild
+    applyBambuAssembleToBuild,
+    extruderMap
   )
 
   ensureGeomBucket(plateBuckets, 0)
@@ -2949,7 +3060,7 @@ function extractTriangleMeshFromParsedModel(
   if (!plateBucketsHaveGeometry(plateBuckets)) {
     plateBuckets.clear()
     const z = ensureGeomBucket(plateBuckets, 0)
-    collectDirectMeshes(objects, z, colorLookup, filamentPaletteRgb)
+    collectDirectMeshes(objects, z, colorLookup, filamentPaletteRgb, extruderMap, objectWorldTransforms)
   }
 
   if (!plateBucketsHaveGeometry(plateBuckets)) {
@@ -3000,6 +3111,83 @@ function clusterMeshesByCentroidGridSlicerXY(meshes: TriangleMesh[]): number[] |
     return ids
   }
   return null
+}
+
+/**
+ * When a sub-model file's geometry lands in a single catch-all plate but its sub-objects are
+ * distinct pieces (from per-component world transforms), try to split them into separate plates.
+ *
+ * Strategy 1 (preferred): group by extruder slot — matches the "one color per plate" workflow
+ * in Bambu Studio where the user assigns each color group to a separate plate.
+ * Strategy 2 (fallback): spatial clustering in slicer XY — used when all slots are the same
+ * but parts are clearly scattered across virtual plate positions.
+ *
+ * Called BEFORE viewer axis remapping so centroids are in slicer XY space.
+ * `basePlateId` sets the first synthetic plate index (subsequent plates get basePlateId+1, +2, …).
+ */
+function splitPlatePartsBySubObjectClusters(
+  mesh: TriangleMesh,
+  basePlateId: number
+): TriangleMesh {
+  if (!mesh.plateParts || mesh.plateParts.length !== 1) return mesh
+  const pp = mesh.plateParts[0]!
+  if (!pp.subObjects || pp.subObjects.length < 2) return mesh
+
+  // Strategy 1: group by extruder slot.  When the user assigns each color to its own plate
+  // (Bambu "one color per plate" workflow), distinct extruder slots cleanly identify plates
+  // even when the spatial positions span a single virtual build volume.
+  const slotMap = new Map<number, TriangleMeshPlateSubObject[]>()
+  for (const so of pp.subObjects) {
+    if (!slotMap.has(so.extruderSlot)) slotMap.set(so.extruderSlot, [])
+    slotMap.get(so.extruderSlot)!.push(so)
+  }
+  if (slotMap.size >= 2) {
+    const newPlateParts: TriangleMeshPlatePart[] = []
+    let plateCounter = basePlateId
+    for (const [slot, subs] of [...slotMap.entries()].sort(([a], [b]) => a - b)) {
+      const plateMesh = mergeTriangleMeshList(subs.map((so) => so.mesh))
+      const subObjects = subs.length >= 2 ? subs : undefined
+      newPlateParts.push({
+        plateId: plateCounter++,
+        mesh: plateMesh,
+        filamentSlot: slot,
+        ...(subObjects ? { subObjects } : {})
+      })
+    }
+    if (newPlateParts.length >= 2) {
+      const mergedAll = mergeTriangleMeshList(newPlateParts.map((p) => p.mesh))
+      return { ...mergedAll, plateParts: newPlateParts }
+    }
+  }
+
+  // Strategy 2: spatial clustering (fallback — all sub-objects share the same extruder slot).
+  const clusterIds = clusterMeshesByCentroidGridSlicerXY(pp.subObjects.map((so) => so.mesh))
+  if (!clusterIds) return mesh
+  const numClusters = new Set(clusterIds).size
+  if (numClusters < 2) return mesh
+
+  const clusterMap = new Map<number, TriangleMeshPlateSubObject[]>()
+  for (let i = 0; i < clusterIds.length; i++) {
+    const cid = clusterIds[i]!
+    if (!clusterMap.has(cid)) clusterMap.set(cid, [])
+    clusterMap.get(cid)!.push(pp.subObjects[i]!)
+  }
+
+  const newPlateParts: TriangleMeshPlatePart[] = []
+  let plateCounter = basePlateId
+  for (const [, subs] of [...clusterMap.entries()].sort(([a], [b]) => a - b)) {
+    const plateMesh = mergeTriangleMeshList(subs.map((so) => so.mesh))
+    const subObjects = subs.length >= 2 ? subs : undefined
+    newPlateParts.push({
+      plateId: plateCounter++,
+      mesh: plateMesh,
+      ...(subObjects ? { subObjects } : {})
+    })
+  }
+
+  if (newPlateParts.length <= 1) return mesh
+  const mergedAll = mergeTriangleMeshList(newPlateParts.map((p) => p.mesh))
+  return { ...mergedAll, plateParts: newPlateParts }
 }
 
 /**
@@ -3148,7 +3336,17 @@ function isDefaultThreeMfModelPath(zipMemberName: string): boolean {
 }
 
 /** Plate assignment + world-space transform for a Bambu split-format sub-model file. */
-type SubModelPlateHint = { plateId: number; worldTransform: Float64Array }
+type SubModelPlateHint = {
+  plateId: number
+  worldTransform: Float64Array
+  /**
+   * Per-component world transforms keyed by sub-model objectid string.
+   * Present when a single sub-model path hosts multiple mesh objects that are
+   * referenced by separate `<component objectid="…">` entries in the primary model
+   * (e.g. Bambu files where all parts live in one `object_1.model`).
+   */
+  objectTransforms?: Map<string, Float64Array>
+}
 
 /**
  * Bambu split-format 3MF: the main model file (`3D/3dmodel.model`) contains assembly objects
@@ -3161,7 +3359,8 @@ type SubModelPlateHint = { plateId: number; worldTransform: Float64Array }
  */
 function buildSubModelPathToPlateMap(
   mainModel: Record<string, unknown>,
-  plateAssignment: Map<string, number>
+  plateAssignment: Map<string, number>,
+  bambuAssemble: BambuAssembleComposeMap | null = null
 ): Map<string, SubModelPlateHint> {
   const result = new Map<string, SubModelPlateHint>()
   const resources = (mainModel as { resources?: unknown }).resources
@@ -3191,7 +3390,17 @@ function buildSubModelPathToPlateMap(
     if (!assemblyId) continue
     const plateId = lookupPlateForOidInst(plateAssignment, assemblyId, 0)
     if (plateId === undefined || plateId === 0) continue
-    const buildTr = buildTransforms.get(assemblyId) ?? identityMat4()
+    // Apply Bambu assemble placement (left-multiply) so sub-model pieces land at their correct
+    // print positions rather than their assembled-design positions.  Without this, all parts of
+    // a multi-piece plate appear at the same overlapping slicer coordinates.
+    let buildTr = buildTransforms.get(assemblyId) ?? identityMat4()
+    if (bambuAssemble) {
+      const canonOid = canonical3mfObjectIdForKey(assemblyId)
+      const row = bambuAssemble.get(assemblyId)?.get(0) ?? bambuAssemble.get(canonOid)?.get(0)
+      if (row) {
+        buildTr = multiplyMat4(row, buildTr)
+      }
+    }
     const comps = obj.components ?? (obj as { Components?: unknown }).Components
     const components = normalizeArray(
       (comps as { component?: unknown; Component?: unknown } | undefined)?.component ??
@@ -3211,10 +3420,30 @@ function buildSubModelPathToPlateMap(
         (comp.transform as string | undefined)
       const ct12 = parseTransform12(ctr)
       const compTr = ct12 ? mat4From3mf12(ct12) : identityMat4()
-      // World transform = buildItemTransform × componentTransform
+      // World transform = (bambuAssemble × buildItemTransform) × componentTransform
       const worldTransform = multiplyMat4(buildTr, compTr)
       const normalized = normalizePath(normalizePartPath(rawPath))
-      result.set(normalized, { plateId, worldTransform })
+
+      // Accumulate per-objectid transforms so when multiple components share the same
+      // sub-model path (all 8 chicken parts in object_1.model) each gets its own matrix.
+      const componentOid =
+        readXmlAttrFirstMatch(comp, ["objectid"]) ??
+        (comp["@_objectid"] as string | undefined) ??
+        (comp.objectid as string | undefined)
+
+      let entry = result.get(normalized)
+      if (!entry) {
+        entry = { plateId, worldTransform, objectTransforms: new Map() }
+        result.set(normalized, entry)
+      } else {
+        entry.worldTransform = worldTransform  // last component wins as global fallback
+      }
+      if (componentOid) {
+        const coidStr = String(componentOid)
+        entry.objectTransforms!.set(coidStr, worldTransform)
+        const canonOid = canonical3mfObjectIdForKey(coidStr)
+        if (canonOid !== coidStr) entry.objectTransforms!.set(canonOid, worldTransform)
+      }
     }
   }
   return result
@@ -3237,7 +3466,16 @@ function remapThreeMfPrintVolumeToViewer(mesh: TriangleMesh): void {
   }
   remap(mesh.positions)
   if (mesh.plateParts) {
-    for (const pp of mesh.plateParts) remap(pp.mesh.positions)
+    for (const pp of mesh.plateParts) {
+      // For single-plate files with sub-objects, finalizeGeomBucketsToMesh returns
+      // { ...merged, plateParts } where merged === plateParts[0].mesh (same object,
+      // mergeTriangleMeshList([x]) === x).  The top-level remap above already covered
+      // that buffer; remapping it a second time would corrupt the coordinates.
+      if (pp.mesh.positions !== mesh.positions) remap(pp.mesh.positions)
+      if (pp.subObjects) {
+        for (const so of pp.subObjects) remap(so.mesh.positions)
+      }
+    }
   }
 }
 
@@ -3350,6 +3588,28 @@ async function expandOidInstMapsWithPrimaryOpcModel(
 }
 
 /** `Metadata/plate_<n>.png` members (Bambu), sorted by plate index. */
+/** Avoids the spread-into-charCodeAt stack-overflow for large typed arrays. */
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let bin = ''
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!)
+  return btoa(bin)
+}
+
+async function extractThumbnailDataUrls(zip: JSZip, paths: string[]): Promise<string[]> {
+  const results: string[] = []
+  for (const p of paths) {
+    const entry = findZipEntry(zip, p)
+    if (!entry) { results.push(''); continue }
+    try {
+      const bytes = await entry.async('uint8array')
+      results.push(`data:image/png;base64,${uint8ArrayToBase64(bytes)}`)
+    } catch {
+      results.push('')
+    }
+  }
+  return results
+}
+
 function listPlateThumbnailPathsInZip(zip: JSZip): string[] | undefined {
   const paths: string[] = []
   for (const key of Object.keys(zip.files)) {
@@ -3707,7 +3967,10 @@ async function buildThreeMfPackageMeta(
     })
   }
 
-  const plateThumbnailPaths = listPlateThumbnailPathsInZip(zip)
+  const plateThumbnailPaths    = listPlateThumbnailPathsInZip(zip)
+  const plateThumbnailDataUrls = plateThumbnailPaths
+    ? await extractThumbnailDataUrls(zip, plateThumbnailPaths)
+    : undefined
 
   return {
     plateCount,
@@ -3721,6 +3984,7 @@ async function buildThreeMfPackageMeta(
     ...(hasMeaningfulTypes ? { filamentTypes: typesTrim } : {}),
     ...(processHints ? { processHints } : {}),
     ...(plateThumbnailPaths ? { plateThumbnailPaths } : {}),
+    ...(plateThumbnailDataUrls ? { plateThumbnailDataUrls } : {}),
     ...(bedParsed ? { bedWidthMm: bedParsed.widthMm, bedDepthMm: bedParsed.depthMm } : {}),
     ...(buildObjects.length > 0 ? { buildObjects } : {}),
     ...(parsedOpcObjectIds.length > 0 ? { parsedOpcObjectIds } : {})
@@ -3782,22 +4046,34 @@ function mergeMultiPartThreeMfMeshes(
   if (parts.length === 0) return { positions: new Float32Array(0), indices: new Uint32Array(0) }
   if (parts.length === 1) return parts[0]!
   const baseMerge = mergeTriangleMeshList(parts)
-  const byPlate = new Map<number, TriangleMesh[]>()
+  // Each entry carries a mesh and optional subObjects (propagated from Bambu split-format files).
+  const byPlate = new Map<number, Array<{ mesh: TriangleMesh; subObjects?: TriangleMeshPlateSubObject[] }>>()
   const handled = new Array<boolean>(parts.length).fill(false)
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i]!
+    const hint = partPlateHints?.[i]
+    // Bambu split-format pattern: single catch-all plate-0 with a known plate hint.
+    // Use the hint for correct plate ID while preserving any subObjects from the part.
+    const isSingleCatchAll =
+      p.plateParts && p.plateParts.length === 1 && p.plateParts[0].plateId === 0
+    if (isSingleCatchAll && hint !== undefined && Number.isFinite(hint)) {
+      if (!byPlate.has(hint)) byPlate.set(hint, [])
+      const catchAllSubs = p.plateParts![0].subObjects
+      byPlate.get(hint)!.push({ mesh: p.plateParts![0].mesh, subObjects: catchAllSubs })
+      handled[i] = true
+      continue
+    }
     if (p.plateParts && p.plateParts.length > 0) {
       for (const pp of p.plateParts) {
         if (!byPlate.has(pp.plateId)) byPlate.set(pp.plateId, [])
-        byPlate.get(pp.plateId)!.push(pp.mesh)
+        byPlate.get(pp.plateId)!.push({ mesh: pp.mesh, subObjects: pp.subObjects })
       }
       handled[i] = true
       continue
     }
-    const hint = partPlateHints?.[i]
     if (hint !== undefined && Number.isFinite(hint)) {
       if (!byPlate.has(hint)) byPlate.set(hint, [])
-      byPlate.get(hint)!.push(p)
+      byPlate.get(hint)!.push({ mesh: p })
       handled[i] = true
     }
   }
@@ -3807,13 +4083,24 @@ function mergeMultiPartThreeMfMeshes(
     if (handled[i]) continue
     const pid = nextSyntheticPlate++
     if (!byPlate.has(pid)) byPlate.set(pid, [])
-    byPlate.get(pid)!.push(parts[i]!)
+    byPlate.get(pid)!.push({ mesh: parts[i]! })
   }
   if (byPlate.size <= 1) return baseMerge
   const plateParts: TriangleMeshPlatePart[] = []
   for (const pid of [...byPlate.keys()].sort((a, b) => a - b)) {
-    const list = byPlate.get(pid)!
-    plateParts.push({ plateId: pid, mesh: mergeTriangleMeshList(list) })
+    const entries = byPlate.get(pid)!
+    const meshList = entries.map((e) => e.mesh)
+    // Collect subObjects from all contributing sources for this plate.
+    const allSubs: TriangleMeshPlateSubObject[] = []
+    for (const e of entries) {
+      if (e.subObjects && e.subObjects.length > 0) allSubs.push(...e.subObjects)
+    }
+    const subObjects = allSubs.length >= 2 ? allSubs : undefined
+    plateParts.push({
+      plateId: pid,
+      mesh: mergeTriangleMeshList(meshList),
+      ...(subObjects ? { subObjects } : {})
+    })
   }
   if (plateParts.length <= 1) return baseMerge
   return { ...baseMerge, plateParts }
@@ -3862,8 +4149,10 @@ export async function loadThreeMf(buffer: Uint8Array): Promise<TriangleMesh> {
   )
   const plateAssignment = normalizeOidInstMapKeys(plateExpanded)
   const extruderMap = normalizeOidInstMapKeys(extruderExpanded)
-  // Expand both maps so mesh object IDs (source_object_id in config <part>) resolve correctly
-  await expandMapsWithSourceObjectIds(zip, plateAssignment, extruderMap)
+  // Expand both maps so mesh object IDs (source_object_id in config <part>) resolve correctly.
+  // plateAssignment / extruderMap are null when no config data was found; empty Maps are safe
+  // because expandMapsWithSourceObjectIds early-returns when both sizes are 0.
+  await expandMapsWithSourceObjectIds(zip, plateAssignment ?? new Map(), extruderMap ?? new Map())
   const errors: string[] = []
   const meshParts: TriangleMesh[] = []
   const partPlateHints: (number | undefined)[] = []
@@ -3884,7 +4173,7 @@ export async function loadThreeMf(buffer: Uint8Array): Promise<TriangleMesh> {
         const primaryDoc = parser.parse(primaryXml) as Record<string, unknown>
         const primaryModel = findModelRoot(primaryDoc) ?? deepFindModelWithResources(primaryDoc)
         if (primaryModel) {
-          subModelPathToPlate = buildSubModelPathToPlateMap(primaryModel, plateAssignment)
+          subModelPathToPlate = buildSubModelPathToPlateMap(primaryModel, plateAssignment, bambuAssemble)
         }
       } catch {
         // non-fatal — fall back to existing inference
@@ -3912,15 +4201,34 @@ export async function loadThreeMf(buffer: Uint8Array): Promise<TriangleMesh> {
         continue
       }
 
+      // Bambu split-format files (multiple .model entries) use identity build-item
+      // transforms; the <assemble_item> data from model_settings.config provides the
+      // actual per-instance placement, so we apply it for the primary split file only.
+      //
+      // Single-file (non-split) Bambu 3MF files are different: the <build><item>
+      // transforms already encode the correct print-bed positions.  The assemble items
+      // here represent the *assembly/CAD view* — how parts fit in the final product —
+      // NOT corrections to the print placement.  Multiplying them onto the build
+      // transforms scatters sub-objects across thousands of mm (their CAD positions).
+      // For single-file models we therefore use ONLY the build transforms.
       const usePrimaryBambuAux =
-        !multiModel || (hasDefaultMain ? isDefaultThreeMfModelPath(modelFile.name) : candidates[0] === modelFile)
+        multiModel && (hasDefaultMain ? isDefaultThreeMfModelPath(modelFile.name) : candidates[0] === modelFile)
+
+      // Bambu split-format: look up the sub-model hint BEFORE extraction so per-component
+      // world transforms can be forwarded into collectDirectMeshes for files that pack
+      // multiple mesh objects (referenced by separate <component objectid="…"> entries in
+      // the primary model) into one sub-model file.
+      const normalizedName = normalizePath(normalizePartPath(modelFile.name))
+      const subHint = subModelPathToPlate.get(normalizedName)
 
       let mesh = extractTriangleMeshFromParsedModel(
         model,
         filamentPaletteRgb,
         bambuAssemble,
         usePrimaryBambuAux,
-        plateAssignment
+        plateAssignment,
+        extruderMap,
+        subHint?.objectTransforms ?? null
       )
       if (mesh.positions.length === 0) {
         errors.push(`${modelFile.name}: no mesh geometry`)
@@ -3932,17 +4240,43 @@ export async function loadThreeMf(buffer: Uint8Array): Promise<TriangleMesh> {
         (model as { '@_Unit'?: string })['@_Unit']
       const unitMmScale = threeMfUnitToMmScale(unitAttr)
 
-      // Bambu split-format: apply the world transform from the main model's <build> items
-      // BEFORE viewer remapping so objects land at their correct slicer-space positions.
-      const normalizedName = normalizePath(normalizePartPath(modelFile.name))
-      const subHint = subModelPathToPlate.get(normalizedName)
+      // Apply slicer-space positioning BEFORE viewer axis remapping.
       if (subHint !== undefined) {
-        mesh.positions = transformPositionsMat4(mesh.positions, subHint.worldTransform)
-        if (mesh.plateParts) {
-          for (const pp of mesh.plateParts) {
-            pp.mesh.positions = transformPositionsMat4(pp.mesh.positions, subHint.worldTransform)
+        if (subHint.objectTransforms && subHint.objectTransforms.size > 0) {
+          // Per-object transforms were already applied inside collectDirectMeshes; each
+          // sub-object mesh is already at its correct slicer position.  Try to split the
+          // single catch-all plate into per-cluster plates based on XY spatial separation.
+          mesh = splitPlatePartsBySubObjectClusters(mesh, subHint.plateId)
+        } else {
+          // Single global world transform: shift all geometry in one pass.
+          mesh.positions = transformPositionsMat4(mesh.positions, subHint.worldTransform)
+          if (mesh.plateParts) {
+            for (const pp of mesh.plateParts) {
+              pp.mesh.positions = transformPositionsMat4(pp.mesh.positions, subHint.worldTransform)
+              if (pp.subObjects) {
+                for (const so of pp.subObjects) {
+                  so.mesh.positions = transformPositionsMat4(so.mesh.positions, subHint.worldTransform)
+                }
+              }
+            }
           }
         }
+      }
+
+      // Bambu split-format: a single sub-model file that had no build items lands its geometry
+      // in catch-all plate bucket 0.  When we have a definitive plate hint (from the primary
+      // model's component → plateAssignment look-up), remap plateId 0 → real plate ID so the
+      // geometry is attributed to the correct plate number in both the viewer layout and the
+      // sidebar's "Plate IDs" list.  Only applies when there is exactly one plate part (the
+      // catch-all) and the real plate is ≥ 1.
+      if (
+        subHint &&
+        subHint.plateId >= 1 &&
+        mesh.plateParts &&
+        mesh.plateParts.length === 1 &&
+        mesh.plateParts[0].plateId === 0
+      ) {
+        mesh.plateParts[0].plateId = subHint.plateId
       }
 
       let meshRemappedToViewer = false
