@@ -13,6 +13,8 @@ with full support for Bambu Lab multi-plate and AMS color 3MF files.
 
 ![Model Forge — main view](docs/screenshots/main-view.png)
 
+![Demo — loading a file and turntable](docs/screenshots/demo.gif)
+
 </div>
 
 ---
