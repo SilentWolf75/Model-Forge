@@ -10,12 +10,15 @@ A desktop 3D model viewer built for print preparation. Inspect, orient, analyze,
 
 Head to the [Releases](https://github.com/SilentWolf75/Model-Forge/releases) page to grab the latest build.
 
-| File | Description |
-|------|-------------|
-| `Model Forge-x.x.x-Setup.exe` | Installer — adds Start Menu shortcut and file associations |
-| `Model Forge-x.x.x-portable.exe` | Portable — single `.exe`, no installation needed |
+| File | Platform | Description |
+|------|----------|-------------|
+| `Model Forge-x.x.x-Setup.exe` | Windows | Installer — adds Start Menu shortcut and file associations |
+| `Model Forge-x.x.x-portable.exe` | Windows | Portable — single `.exe`, no installation needed |
+| `Model Forge-x.x.x-mac.dmg` | macOS | Universal DMG — runs on both Intel and Apple Silicon |
 
-> Windows 10 / 11 x64 only.
+> **Windows:** 10 / 11 x64  
+> **macOS:** 10.15 Catalina or later (Intel + Apple Silicon)  
+> First launch on macOS requires **right-click → Open** to bypass the unsigned app warning.
 
 ---
 
@@ -100,8 +103,9 @@ npm run dev
 
 **Build a distributable:**
 ```bash
-npm run pack:win          # NSIS installer + portable .exe
-npm run pack:win:setup    # NSIS installer only
+npm run pack:win          # Windows: NSIS installer + portable .exe
+npm run pack:win:setup    # Windows: NSIS installer only
+npm run pack:mac          # macOS: universal DMG (Intel + Apple Silicon)
 ```
 
 Output goes to the `release/` folder.
@@ -119,7 +123,7 @@ Output goes to the `release/` folder.
 | CAD kernel | occt-import-js (WASM) |
 | 3MF / ZIP | JSZip + fast-xml-parser |
 | Build | electron-vite + Vite 8 |
-| Packaging | electron-builder (NSIS + portable) |
+| Packaging | electron-builder (NSIS + portable + DMG) |
 
 ---
 
