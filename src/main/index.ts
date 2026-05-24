@@ -114,7 +114,9 @@ function savePersistedWindowState(win: BrowserWindow): void {
 // Create one at: github.com/settings/personal-access-tokens/new
 //   → Fine-grained token → Repository: Model-Forge → Permissions: Metadata = Read-only
 const UPDATE_REPO  = 'SilentWolf75/Model-Forge'
-const UPDATE_TOKEN = '' // <-- paste your fine-grained PAT here
+// Token is injected at build time from .env.local (local) or GitHub Secrets (CI).
+// Never hardcode it here — GitHub will auto-revoke any token committed to the repo.
+const UPDATE_TOKEN = (import.meta.env['MAIN_VITE_UPDATE_TOKEN'] as string) ?? ''
 
 async function checkForUpdates(win: BrowserWindow): Promise<void> {
   if (!UPDATE_TOKEN) return

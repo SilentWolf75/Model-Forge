@@ -31,6 +31,7 @@ jobs:
         run: npm run pack:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAIN_VITE_UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
 
   # ── macOS ──────────────────────────────────────────────────────────────────
   build-mac:
@@ -67,6 +68,7 @@ jobs:
           electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAIN_VITE_UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
           # Disable automatic code-signing identity search.
           # Users will need to right-click → Open the first time (unsigned app).
           CSC_IDENTITY_AUTO_DISCOVERY: false
