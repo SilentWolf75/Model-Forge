@@ -40,7 +40,7 @@ if (signtool) {
 }
 
 const extra = process.argv.slice(2)
-const ebArgs = extra.length > 0 ? extra : ['--win']
+const ebArgs = extra.length > 0 ? extra : ['--win', '--publish', 'never']
 
 const result = spawnSync('electron-builder', ebArgs, {
   stdio: 'inherit',

@@ -27,11 +27,17 @@ jobs:
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
 
-      - name: Build and publish Windows (installer + portable)
+      - name: Build Windows (installer + portable)
         run: npm run pack:win
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MAIN_VITE_UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+
+      - name: Upload Windows assets to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/Model Forge-*-Setup.exe
+            release/Model Forge-*-portable.exe
 
   # ── macOS ──────────────────────────────────────────────────────────────────
   build-mac:
@@ -48,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
 
-      - name: Build and publish Mac (universal DMG)
+      - name: Build Mac (universal DMG)
         run: |
           npm run icons
           # Convert 512×512 PNG → .icns using macOS built-in tools
@@ -65,10 +71,12 @@ jobs:
           sips -z 1024 1024 build/icon.png --out build/icon.iconset/icon_512x512@2x.png
           iconutil -c icns build/icon.iconset -o build/icon.icns
           npm run build
-          npx electron-builder --mac
+          npx electron-builder --mac --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MAIN_VITE_UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
-          # Disable automatic code-signing identity search.
-          # Users will need to right-click → Open the first time (unsigned app).
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload Mac assets to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/Model Forge-*.dmg
