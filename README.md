@@ -164,6 +164,17 @@ Output goes to the `release/` folder.
 
 ---
 
+## Demo Models
+
+Models used in screenshots and demo are used with credit to their creators:
+
+| Model | Designer | Source |
+|-------|----------|--------|
+| The Grumpy Bear — The Grumbler | [Lemmy3DPrint](https://makerworld.com/en/models/1665480-the-grumpy-bear-the-grumbler) | MakerWorld |
+| Goofy Series — Turtle Movable Eyes NOAMS | [AGo3D](https://makerworld.com/en/models/2776672-goofy-series-turtle-movable-eyes-noams) | MakerWorld |
+
+---
+
 ## License
 
 MIT
