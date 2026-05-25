@@ -5,7 +5,7 @@
 **A desktop 3D print viewer built for serious makers.**
 
 Inspect, orient, analyze, and export your models before sending them to the slicer —
-with full support for Bambu Lab multi-plate and AMS color 3MF files.
+with full support for multi-plate and AMS color 3MF files.
 
 [![Release](https://img.shields.io/badge/release-v2.0.0--alpha.5-blue?style=flat-square)](https://github.com/SilentWolf75/Model-Forge/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue?style=flat-square)](#downloads)
@@ -51,9 +51,9 @@ Faces are color-coded by their angle from horizontal using a real-time GLSL shad
 
 ![Overhang heat map](docs/screenshots/overhang.png)
 
-### Bambu Lab / 3MF Support
+### Multi-Plate 3MF Support
 
-Full support for the Bambu Lab 3MF format, including multi-plate layouts, AMS color data, and slicer metadata.
+Full support for the 3MF format, including multi-plate layouts, AMS color data, and slicer metadata.
 
 ![Multi-plate 3MF layout](docs/screenshots/multi-plate.png)
 
@@ -100,7 +100,7 @@ Full support for the Bambu Lab 3MF format, including multi-plate layouts, AMS co
 
 | Format | Notes |
 |--------|-------|
-| **3MF** | Full Bambu Lab / Orca Slicer metadata, multi-plate, AMS color |
+| **3MF** | Full multi-plate metadata, AMS color, Orca Slicer compatible |
 | **STL** | Binary and ASCII |
 | **OBJ** | With MTL material file |
 | **STEP / STP** | Via WASM CAD kernel (occt-import-js) |
