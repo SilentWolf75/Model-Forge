@@ -697,40 +697,52 @@ function ViewerScene({
           obj.material = OVERHANG_MAT
         }
       } else if (viewMode === 'wallThick' && !obj.userData.wallThickApplied) {
-        // Compute wall thickness from the Three.js geometry directly
-        const origGeo  = obj.geometry as THREE.BufferGeometry
-        const flatGeo  = origGeo.toNonIndexed()
-        const posAttr  = flatGeo.attributes.position as THREE.BufferAttribute
-        const triCount = posAttr.count / 3
-        if (triCount > 0) {
-          // Build a synthetic flat TriangleMesh (sequential indices)
-          const positions  = new Float32Array(posAttr.array)
-          const flatIdx    = new Uint32Array(triCount * 3)
-          for (let i = 0; i < flatIdx.length; i++) flatIdx[i] = i
-          // Estimate max search distance from geometry bounds
-          const box  = new THREE.Box3().setFromBufferAttribute(posAttr)
-          const diag = box.min.distanceTo(box.max)
-          const maxD = Math.max(2, Math.min(15, diag * 0.08))
-          const { perTriColor } = computeWallThicknessColors(
-            { positions, indices: flatIdx } as import('../mesh/types').TriangleMesh,
-            { maxDistMm: maxD }
-          )
-          // Expand per-triangle colour to 3 verts per triangle
-          const colorArr = new Float32Array(triCount * 9)
-          for (let t = 0; t < triCount; t++) {
-            const r = perTriColor[t * 3]!, g = perTriColor[t * 3 + 1]!, b = perTriColor[t * 3 + 2]!
-            colorArr[t*9]=r; colorArr[t*9+1]=g; colorArr[t*9+2]=b
-            colorArr[t*9+3]=r; colorArr[t*9+4]=g; colorArr[t*9+5]=b
-            colorArr[t*9+6]=r; colorArr[t*9+7]=g; colorArr[t*9+8]=b
-          }
-          flatGeo.setAttribute('color', new THREE.Float32BufferAttribute(colorArr, 3))
-        }
+        // Swap to a flat (non-indexed) geometry immediately so the model stays visible
+        // while the thickness is computed.  A neutral grey material is shown first.
+        const origGeo = obj.geometry as THREE.BufferGeometry
+        const flatGeo = origGeo.toNonIndexed()
         flatGeo.computeVertexNormals()
         obj.userData.origGeo = origGeo
         obj.userData.origMat = obj.material
         obj.userData.wallThickApplied = true
         obj.geometry = flatGeo
-        obj.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 })
+        const pendingMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.85, metalness: 0 })
+        obj.material = pendingMat
+
+        // Capture references for the async callback
+        const capturedObj = obj
+        const capturedFlat = flatGeo
+        const capturedPending = pendingMat
+
+        // Run computation on next tick so the frame can render the grey placeholder first
+        setTimeout(() => {
+          if (!capturedObj.userData.wallThickApplied) return  // mode was exited before we ran
+          const posAttr  = capturedFlat.attributes.position as THREE.BufferAttribute
+          const triCount = posAttr.count / 3
+          if (triCount > 0) {
+            const positions = new Float32Array(posAttr.array)
+            const flatIdx   = new Uint32Array(triCount * 3)
+            for (let i = 0; i < flatIdx.length; i++) flatIdx[i] = i
+            const box  = new THREE.Box3().setFromBufferAttribute(posAttr)
+            const diag = box.min.distanceTo(box.max)
+            const maxD = Math.max(2, Math.min(15, diag * 0.08))
+            const { perTriColor } = computeWallThicknessColors(
+              { positions, indices: flatIdx } as import('../mesh/types').TriangleMesh,
+              { maxDistMm: maxD }
+            )
+            const colorArr = new Float32Array(triCount * 9)
+            for (let t = 0; t < triCount; t++) {
+              const r=perTriColor[t*3]!, g=perTriColor[t*3+1]!, b=perTriColor[t*3+2]!
+              colorArr[t*9]=r;   colorArr[t*9+1]=g; colorArr[t*9+2]=b
+              colorArr[t*9+3]=r; colorArr[t*9+4]=g; colorArr[t*9+5]=b
+              colorArr[t*9+6]=r; colorArr[t*9+7]=g; colorArr[t*9+8]=b
+            }
+            capturedFlat.setAttribute('color', new THREE.Float32BufferAttribute(colorArr, 3))
+            const colorMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 })
+            capturedObj.material = colorMat
+            capturedPending.dispose()
+          }
+        }, 0)
       } else if (obj.material instanceof THREE.MeshStandardMaterial) {
         applyViewMode(obj.material, viewMode)
       }
