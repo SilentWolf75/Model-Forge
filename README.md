@@ -31,7 +31,9 @@ Grab the latest build from the [Releases](https://github.com/SilentWolf75/Model-
 
 > **Windows:** 10 / 11 x64 &nbsp;·&nbsp; **macOS:** 10.15 Catalina or later (Intel + Apple Silicon)
 >
-> First launch on macOS: **right-click → Open** to bypass the unsigned app warning.
+> **Windows — SmartScreen warning:** The installer is not yet code-signed. Windows may show a blue "Windows protected your PC" dialog. Click **More info** → **Run anyway** to proceed. This is normal for indie software and will improve as the app gains more users.
+>
+> **macOS — first launch:** **Right-click → Open** to bypass the unsigned app warning.
 
 ---
 
