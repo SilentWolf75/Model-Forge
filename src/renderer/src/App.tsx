@@ -94,8 +94,13 @@ const idleStatusMessage = 'Open a model to begin. Formats: STL OBJ 3MF GLB GLTF 
 
 type RecentFile = { path: string; name: string; timestamp: number }
 
-function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
+function SettingsModal({ onClose, bedSizeMm, onBedSizeChange }: {
+  onClose: () => void
+  bedSizeMm: number
+  onBedSizeChange: (v: number) => void
+}): JSX.Element {
   const [slicerPath, setSlicerPath] = useState<string>('')
+  const [bedInput, setBedInput] = useState<string>(String(bedSizeMm))
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [browsing, setBrowsing] = useState(false)
@@ -116,6 +121,10 @@ function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
 
   const save = async (): Promise<void> => {
     setSaving(true)
+    const parsedBed = parseInt(bedInput, 10)
+    const validBed = Number.isFinite(parsedBed) && parsedBed >= 50 && parsedBed <= 2000 ? parsedBed : bedSizeMm
+    localStorage.setItem('mf-bed-size', String(validBed))
+    onBedSizeChange(validBed)
     await window.api.saveSettings({ slicerPath: slicerPath.trim() || undefined, firstRunDone: true })
     setSaving(false)
     onClose()
@@ -156,6 +165,27 @@ function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
             >
               {browsing ? 'Picking…' : 'Browse…'}
             </button>
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <h3 className="settings-section-title">Print bed size</h3>
+          <p className="settings-desc">
+            Default bed width/depth in mm for the 3D viewer. Used when no printer metadata is available in the loaded file.
+          </p>
+          <div className="settings-row">
+            <input
+              className="settings-input"
+              type="number"
+              min={50}
+              max={2000}
+              step={10}
+              value={bedInput}
+              onChange={(e) => setBedInput(e.target.value)}
+              placeholder="280"
+              style={{ maxWidth: 100 }}
+            />
+            <span style={{ padding: '0 8px', opacity: 0.6, fontSize: '0.85rem' }}>mm (square)</span>
           </div>
         </section>
 
@@ -554,6 +584,7 @@ export function App(): JSX.Element {
   /** Which sidebar sections are collapsed (set of section ids). */
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
   const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('mf-theme') as 'dark' | 'light') ?? 'dark')
+  const [bedSizeMm, setBedSizeMm] = useState<number>(() => parseInt(localStorage.getItem('mf-bed-size') ?? '280', 10))
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const [explodedView, setExplodedView] = useState(false)
   const [swatchCopied, setSwatchCopied] = useState<number | null>(null)
@@ -960,7 +991,7 @@ export function App(): JSX.Element {
   )
 
   const exportPlateAs = useCallback(
-    async (kind: 'stl' | 'obj') => {
+    async (kind: 'stl' | 'obj' | '3mf') => {
       if (!mesh || focusedPlateId === null) return
       const plateMesh = extractPlateMesh(mesh, focusedPlateId)
       if (!plateMesh) { setStatus(`No geometry for plate ${focusedPlateId}.`); return }
@@ -971,6 +1002,7 @@ export function App(): JSX.Element {
         if (!path) { setStatus('Export cancelled.'); return }
         let body: Uint8Array
         if (kind === 'stl') body = encodeBinaryStl(plateMesh)
+        else if (kind === '3mf') body = await encodeThreeMf(plateMesh)
         else body = new TextEncoder().encode(encodeObj(plateMesh, `plate_${focusedPlateId}`))
         await window.api.writeFile(path, body)
         setStatus(`Exported plate ${focusedPlateId} as ${kind.toUpperCase()}.`)
@@ -1662,6 +1694,9 @@ export function App(): JSX.Element {
                   <button type="button" role="menuitem" onClick={() => void exportPlateAs('obj')}>
                     Plate {focusedPlateId} — OBJ
                   </button>
+                  <button type="button" role="menuitem" onClick={() => void exportPlateAs('3mf')}>
+                    Plate {focusedPlateId} — 3MF
+                  </button>
                 </>
               ) : null}
             </div>
@@ -1683,6 +1718,7 @@ export function App(): JSX.Element {
             showCoM={showCoM}
             showDimensions={showDimensions}
             showNormals={showNormals}
+            defaultBedMm={bedSizeMm}
             explodedView={explodedView}
             turntable={turntable}
             materialPreset={materialPreset}
@@ -2357,7 +2393,7 @@ export function App(): JSX.Element {
         </aside>
       </main>
 
-      {settingsOpen ? <SettingsModal onClose={() => setSettingsOpen(false)} /> : null}
+      {settingsOpen ? <SettingsModal onClose={() => setSettingsOpen(false)} bedSizeMm={bedSizeMm} onBedSizeChange={(v) => setBedSizeMm(v)} /> : null}
       {shortcutsOpen ? <ShortcutsModal onClose={() => setShortcutsOpen(false)} /> : null}
       {cmdPaletteOpen ? <CommandPalette commands={commands} onClose={() => setCmdPaletteOpen(false)} /> : null}
 

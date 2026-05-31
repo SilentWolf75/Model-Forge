@@ -130,6 +130,8 @@ interface Props {
   showDimensions?: boolean
   /** When true, render face-normal lines on the model. */
   showNormals?: boolean
+  /** Override the default bed size (mm) shown when no 3MF metadata is present. */
+  defaultBedMm?: number
   /** When true, fan sub-objects outward from the model centre for inspection. */
   explodedView?: boolean
   /** When true, OrbitControls auto-rotate (turntable mode). */
@@ -345,7 +347,7 @@ function ViewerScene({
   outerRef, controlsRef,
   mesh, viewMode, loadAnimSeq,
   openEdgeLinePositions, measureMode, onMeasureResult,
-  clipY, showCoM, showDimensions, showNormals, explodedView,
+  clipY, showCoM, showDimensions, showNormals, defaultBedMm, explodedView,
   materialPreset, annotationMode, annotations, onAnnotationPlace,
 }: ViewerSceneProps): JSX.Element {
   const { camera, gl, scene } = useThree()
@@ -632,7 +634,8 @@ function ViewerScene({
 
     if (!mesh) {
       lastSettledSeqRef.current = -1
-      const bed = createBedGroup(DEFAULT_BED_MM, DEFAULT_BED_MM)
+      const bedSz = defaultBedMm ?? DEFAULT_BED_MM
+      const bed = createBedGroup(bedSz, bedSz)
       scene.add(bed)
       bedGroupsRef.current = [bed]
       // Frame empty bed the same way resetDefaultView would for no-model state
@@ -1144,8 +1147,9 @@ function ViewerScene({
     // model's aspect ratio rather than always being a square.
     const footW = wb.max.x - wb.min.x
     const footD = wb.max.z - wb.min.z
-    const gW    = Math.min(BED_MAX_MM, Math.max(BED_MIN_MM, footW + BED_PAD_MM * 2))
-    const gD    = Math.min(BED_MAX_MM, Math.max(BED_MIN_MM, footD + BED_PAD_MM * 2))
+    const bedRef = defaultBedMm ?? DEFAULT_BED_MM
+    const gW    = Math.min(BED_MAX_MM, Math.max(BED_MIN_MM, Math.max(footW + BED_PAD_MM * 2, bedRef)))
+    const gD    = Math.min(BED_MAX_MM, Math.max(BED_MIN_MM, Math.max(footD + BED_PAD_MM * 2, bedRef)))
     const bed   = createBedGroup(gW, gD)
     scene.add(bed)
     bedGroupsRef.current = [bed]
