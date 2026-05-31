@@ -561,6 +561,8 @@ export function App(): JSX.Element {
   const [viewerDragActive, setViewerDragActive] = useState(false)
   /** Short label for the loading overlay (mirrors status line during load). */
   const [loadPhase, setLoadPhase] = useState<string | null>(null)
+  /** When set, shows a non-cancellable export progress overlay. */
+  const [exportPhase, setExportPhase] = useState<string | null>(null)
   /** Full disk path of the currently loaded file (null if loaded from buffer with no path). */
   const [filePath, setFilePath] = useState<string | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
@@ -975,6 +977,7 @@ export function App(): JSX.Element {
           setStatus('Export cancelled.')
           return
         }
+        setExportPhase(`Exporting ${kind.toUpperCase()}…`)
         let body: Uint8Array
         if (kind === 'stl') body = encodeBinaryStl(mesh)
         else if (kind === 'obj') body = new TextEncoder().encode(encodeObj(mesh))
@@ -986,6 +989,7 @@ export function App(): JSX.Element {
         setStatus(`Export error: ${msg}`)
       } finally {
         setBusy(false)
+        setExportPhase(null)
       }
     },
     [mesh]
@@ -1001,6 +1005,7 @@ export function App(): JSX.Element {
       try {
         const path = await window.api.saveFileDialog(kind)
         if (!path) { setStatus('Export cancelled.'); return }
+        setExportPhase(`Exporting plate ${focusedPlateId} as ${kind.toUpperCase()}…`)
         let body: Uint8Array
         if (kind === 'stl') body = encodeBinaryStl(plateMesh)
         else if (kind === '3mf') body = await encodeThreeMf(plateMesh)
@@ -1012,6 +1017,7 @@ export function App(): JSX.Element {
         setStatus(`Export error: ${msg}`)
       } finally {
         setBusy(false)
+        setExportPhase(null)
       }
     },
     [mesh, focusedPlateId]
@@ -1175,8 +1181,10 @@ export function App(): JSX.Element {
       const path = await window.api.saveFileDialog('stl')
       if (!path) { setStatus('Batch export cancelled.'); return }
       const basePath = path.replace(/\.[^.]+$/, '')
+      const total = mesh.plateParts.length
       let exported = 0
       for (const part of mesh.plateParts) {
+        setExportPhase(`Exporting plate ${part.plateId} of ${total}…`)
         const platePath = `${basePath}_plate${part.plateId}.stl`
         const body = encodeBinaryStl(part.mesh)
         await window.api.writeFile(platePath, body)
@@ -1188,6 +1196,7 @@ export function App(): JSX.Element {
       setStatus(`Batch export error: ${msg}`)
     } finally {
       setBusy(false)
+      setExportPhase(null)
     }
   }, [mesh])
 
@@ -2509,6 +2518,16 @@ export function App(): JSX.Element {
                 Cancel load
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {exportPhase ? (
+        <div className="load-overlay" role="alertdialog" aria-modal="true" aria-busy="true" aria-live="polite">
+          <div className="load-panel">
+            <div className="load-spinner" aria-hidden />
+            <p className="load-phase">{exportPhase}</p>
+            <p className="load-hint">Please wait while the file is being written to disk.</p>
           </div>
         </div>
       ) : null}
