@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0 Alpha 6 — 2026-05-31
+
+- **Mirror X/Y/Z:** New toolbar buttons (⇔X, ⇔Y, ⇔Z) flip the model on any axis through its bounding-box centre. Triangle winding order is reversed automatically so normals stay outward-facing after the reflection.
+- **Centre on bed:** New toolbar button moves the model's XZ bounding-box centre to the bed origin (0, 0). Useful before exporting to ensure the slicer places the model in the middle of the bed.
+- **Plate switcher shortcuts:** `[` / `]` keyboard shortcuts cycle backwards/forwards through plates in multi-plate 3MF files without using the sidebar.
+- **Dimensions overlay:** New **Dimensions** toggle in the sidebar overlays W × D × H labels anchored to the model's bounding box in 3D space.
+- **Normals visualizer:** New **Normals** toggle renders short green lines from each face centroid along the face normal — useful for diagnosing flipped or inverted surfaces.
+- **Wall thickness heat map:** New **Wall thick** view mode (toolbar button and keyboard shortcut **A**) colours every face by estimated wall thickness using a spatial-grid opposing-face algorithm. Red < 0.8 mm (critical), orange 0.8–1.6 mm, yellow 1.6–3 mm, green > 3 mm.
+- **Export plate as 3MF:** The Export dropdown now includes a 3MF option for the focused plate, alongside the existing STL and OBJ plate-export options.
+- **Bed size setting:** Settings panel now has a **Print bed size** field (default 280 mm). The viewer uses this as the minimum bed dimension when no printer metadata is available in the loaded file.
+- **Snap to bed visual fix:** The viewer no longer compensates for geometry Y-offset for single-plate models. Non-3MF models are snapped to minY = 0 on load and after auto-orient; after a manual rotation the model visibly floats above the bed, and clicking Snap to bed visually drops it back down.
+- **Bouncier load animation:** Model drop-in animation on load is more pronounced — larger lift (75% of model height, min 40 mm), reduced damping, and slightly longer duration.
+
 ## 2.0 Alpha 5 — 2026-05-24
 
 - **Auto-orient on load:** Non-3MF files (STL, OBJ, STEP, PLY, AMF, FBX, GLTF) are automatically rotated flat-side-down when loaded, matching how the model would be placed in a slicer. 3MF files are already correctly oriented by the slicer and are not rotated.
