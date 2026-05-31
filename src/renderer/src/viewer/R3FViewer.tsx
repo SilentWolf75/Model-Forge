@@ -4,7 +4,7 @@
  * This file owns: scene graph, camera, lighting, overlays, measure mode.
  */
 import {
-  useEffect, useRef, useState, forwardRef, useImperativeHandle, type ForwardedRef,
+  useEffect, useRef, useState, useMemo, forwardRef, useImperativeHandle, type ForwardedRef,
 } from 'react'
 import { Canvas, useThree, useFrame } from '@react-three/fiber'
 import { OrbitControls, GizmoHelper, GizmoViewcube, Html } from '@react-three/drei'
