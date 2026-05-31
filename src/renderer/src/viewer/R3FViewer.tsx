@@ -13,6 +13,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import type { ThreeMfBuildObjectSummary, ThreeMfPackageMeta, TriangleMesh } from '../mesh/types'
 import { triangleMeshToGeometry } from '../mesh/toThree'
+import { computeWallThicknessColors } from '../mesh/wallThickness'
 import { type CameraPresetId } from './cameraPrefs'
 
 // ─── Dev diagnostics ──────────────────────────────────────────────────────────
@@ -89,7 +90,7 @@ const OVERHANG_MAT = new THREE.ShaderMaterial({
 })
 
 // ─── Public types ─────────────────────────────────────────────────────────────
-export type ViewMode = 'solid' | 'wireframe' | 'xray' | 'faceOrient' | 'overhang'
+export type ViewMode = 'solid' | 'wireframe' | 'xray' | 'faceOrient' | 'overhang' | 'wallThick'
 export type SnapView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom'
 
 export type MaterialPreset = 'default' | 'silk' | 'matte' | 'metal'
@@ -665,14 +666,26 @@ function ViewerScene({
     const prev = prevViewModeRef.current
     prevViewModeRef.current = viewMode
     viewModeRef.current     = viewMode
-    const isSpecial = (m: string) => m === 'faceOrient' || m === 'overhang'
+    const isSpecial = (m: string) => m === 'faceOrient' || m === 'overhang' || m === 'wallThick'
     scene.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh) || !obj.name.startsWith('model')) return
-      // Leaving a special mode → restore the saved standard material first
+
+      // Leaving wall-thick mode: restore original geometry + material
+      if (prev === 'wallThick' && obj.userData.wallThickApplied) {
+        const flatGeo = obj.geometry as THREE.BufferGeometry
+        if (obj.userData.origGeo) obj.geometry = obj.userData.origGeo as THREE.BufferGeometry
+        if (obj.userData.origMat) obj.material  = obj.userData.origMat as THREE.MeshStandardMaterial
+        flatGeo.dispose()
+        delete obj.userData.origGeo; delete obj.userData.origMat; delete obj.userData.wallThickApplied
+        return
+      }
+
+      // Leaving face-orient or overhang → restore saved standard material
       if (isSpecial(prev) && obj.userData.origMat instanceof THREE.MeshStandardMaterial) {
         obj.material = obj.userData.origMat as THREE.MeshStandardMaterial
         delete obj.userData.origMat
       }
+
       if (viewMode === 'faceOrient') {
         if (obj.material !== FACE_ORIENT_MAT) {
           obj.userData.origMat = obj.material
@@ -683,12 +696,47 @@ function ViewerScene({
           obj.userData.origMat = obj.material
           obj.material = OVERHANG_MAT
         }
+      } else if (viewMode === 'wallThick' && !obj.userData.wallThickApplied) {
+        // Compute wall thickness from the Three.js geometry directly
+        const origGeo  = obj.geometry as THREE.BufferGeometry
+        const flatGeo  = origGeo.toNonIndexed()
+        const posAttr  = flatGeo.attributes.position as THREE.BufferAttribute
+        const triCount = posAttr.count / 3
+        if (triCount > 0) {
+          // Build a synthetic flat TriangleMesh (sequential indices)
+          const positions  = new Float32Array(posAttr.array)
+          const flatIdx    = new Uint32Array(triCount * 3)
+          for (let i = 0; i < flatIdx.length; i++) flatIdx[i] = i
+          // Estimate max search distance from geometry bounds
+          const box  = new THREE.Box3().setFromBufferAttribute(posAttr)
+          const diag = box.min.distanceTo(box.max)
+          const maxD = Math.max(2, Math.min(15, diag * 0.08))
+          const { perTriColor } = computeWallThicknessColors(
+            { positions, indices: flatIdx } as import('../mesh/types').TriangleMesh,
+            { maxDistMm: maxD }
+          )
+          // Expand per-triangle colour to 3 verts per triangle
+          const colorArr = new Float32Array(triCount * 9)
+          for (let t = 0; t < triCount; t++) {
+            const r = perTriColor[t * 3]!, g = perTriColor[t * 3 + 1]!, b = perTriColor[t * 3 + 2]!
+            colorArr[t*9]=r; colorArr[t*9+1]=g; colorArr[t*9+2]=b
+            colorArr[t*9+3]=r; colorArr[t*9+4]=g; colorArr[t*9+5]=b
+            colorArr[t*9+6]=r; colorArr[t*9+7]=g; colorArr[t*9+8]=b
+          }
+          flatGeo.setAttribute('color', new THREE.Float32BufferAttribute(colorArr, 3))
+        }
+        flatGeo.computeVertexNormals()
+        obj.userData.origGeo = origGeo
+        obj.userData.origMat = obj.material
+        obj.userData.wallThickApplied = true
+        obj.geometry = flatGeo
+        obj.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 })
       } else if (obj.material instanceof THREE.MeshStandardMaterial) {
         applyViewMode(obj.material, viewMode)
       }
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode])
+  }, [viewMode, mesh])
 
   // ── Material preset: update roughness / metalness on existing materials ────
   useEffect(() => {

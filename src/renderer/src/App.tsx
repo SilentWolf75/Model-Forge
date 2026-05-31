@@ -226,6 +226,7 @@ function ShortcutsModal({ onClose }: { onClose: () => void }): JSX.Element {
             <tr><td className="sc-key">P</td><td>Save screenshot</td></tr>
             <tr><td className="sc-key">F</td><td>Toggle face orientation overlay</td></tr>
             <tr><td className="sc-key">H</td><td>Toggle overhang heat map</td></tr>
+            <tr><td className="sc-key">A</td><td>Toggle wall thickness heat map</td></tr>
             <tr><td className="sc-key">T</td><td>Toggle turntable (auto-rotate)</td></tr>
             <tr><td className="sc-key">M</td><td>Toggle measure mode</td></tr>
             <tr><td className="sc-key">E</td><td>Toggle open edge highlight</td></tr>
@@ -1281,6 +1282,7 @@ export function App(): JSX.Element {
         case 'e': case 'E': if (mesh) toggleOpenEdges(); break
         case 'f': case 'F': if (mesh) setViewMode((v) => v === 'faceOrient' ? 'solid' : 'faceOrient'); break
         case 'h': case 'H': if (mesh) setViewMode((v) => v === 'overhang' ? 'solid' : 'overhang'); break
+        case 'a': case 'A': if (mesh) setViewMode((v) => v === 'wallThick' ? 'solid' : 'wallThick'); break
         case 't': case 'T': if (mesh) setTurntable((v) => !v); break
         case '[': if (mesh) cyclePlate(-1); break
         case ']': if (mesh) cyclePlate(1);  break
@@ -1313,6 +1315,7 @@ export function App(): JSX.Element {
     { id: 'view-xray',   label: 'View: Look-through (L)',        run: () => setViewMode('xray'),        disabled: !mesh },
     { id: 'view-face',   label: 'View: Face orientation (F)',    run: () => setViewMode('faceOrient'),  disabled: !mesh },
     { id: 'view-ohang',  label: 'View: Overhang heat map (H)',   run: () => setViewMode('overhang'),    disabled: !mesh },
+    { id: 'view-wall',   label: 'View: Wall thickness (A)',      run: () => setViewMode('wallThick'),   disabled: !mesh },
     { id: 'mat-default', label: 'Material: Default',            run: () => setMaterialPreset('default'), disabled: !mesh },
     { id: 'mat-silk',    label: 'Material: Silk (glossy)',       run: () => setMaterialPreset('silk'),    disabled: !mesh },
     { id: 'mat-matte',   label: 'Material: Matte (flat)',        run: () => setMaterialPreset('matte'),   disabled: !mesh },
@@ -1402,7 +1405,7 @@ export function App(): JSX.Element {
           {/* ── View / Scene / Cam ── */}
           <div className="seg">
             <span className="seg-label">View</span>
-            {(['solid', 'wireframe', 'xray', 'faceOrient', 'overhang'] as const).map((m) => (
+            {(['solid', 'wireframe', 'xray', 'faceOrient', 'overhang', 'wallThick'] as const).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -1413,10 +1416,16 @@ export function App(): JSX.Element {
                   !mesh ? 'Open a model first'
                   : m === 'faceOrient' ? 'Colour front faces blue and back faces red — spot inverted normals (F)'
                   : m === 'overhang'   ? 'Heat-map faces by overhang angle: green ≤ 45° / yellow / red > 45° (H)'
+                  : m === 'wallThick'  ? 'Heat-map faces by estimated wall thickness: red < 0.8mm / orange / yellow / green > 3mm (A)'
                   : undefined
                 }
               >
-                {m === 'solid' ? 'Solid' : m === 'wireframe' ? 'Wireframe' : m === 'xray' ? 'Look-through' : m === 'faceOrient' ? 'Face orient' : 'Overhang'}
+                {m === 'solid' ? 'Solid'
+                  : m === 'wireframe' ? 'Wireframe'
+                  : m === 'xray'      ? 'Look-through'
+                  : m === 'faceOrient'? 'Face orient'
+                  : m === 'overhang'  ? 'Overhang'
+                  : 'Wall thick'}
               </button>
             ))}
           </div>
