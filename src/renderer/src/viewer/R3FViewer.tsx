@@ -37,7 +37,7 @@ const DEFAULT_RADIUS_FACTOR     = 1.38
 const MULTI_PLATE_VIEW_ALPHA    = -0.75 * Math.PI  // overview: front-left corner — all 3 cols equally visible
 const MULTI_PLATE_VIEW_BETA     = 0.92             // slightly more top-down than single plate
 const MULTI_PLATE_RADIUS_FACTOR = 1.14             // a bit more margin around the grid
-const BOUNCE_DURATION = 0.97  // seconds ≈ 58 frames @ 60 fps
+const BOUNCE_DURATION = 1.15  // seconds ≈ 69 frames @ 60 fps
 const BG_COLOR = '#242933'    // sRGB match for Orca/Bambu dark background
 
 // Orca gouraud.vs eye-space light directions (FROM surface TO light)
@@ -126,6 +126,10 @@ interface Props {
   clipY?: number | null
   /** When true, show a center-of-mass crosshair marker in the scene. */
   showCoM?: boolean
+  /** When true, render W×D×H dimension labels anchored to the model's bounding box. */
+  showDimensions?: boolean
+  /** When true, render face-normal lines on the model. */
+  showNormals?: boolean
   /** When true, fan sub-objects outward from the model centre for inspection. */
   explodedView?: boolean
   /** When true, OrbitControls auto-rotate (turntable mode). */
@@ -325,7 +329,7 @@ function setCameraOrbit(
 }
 
 function bounceEaseOut(startY: number, restY: number, t: number): number {
-  const eased = 1 - Math.abs(Math.cos(t * Math.PI * 2.5)) * Math.exp(-t * 4.5)
+  const eased = 1 - Math.abs(Math.cos(t * Math.PI * 2.8)) * Math.exp(-t * 3.0)
   return startY + (restY - startY) * eased
 }
 
@@ -341,7 +345,7 @@ function ViewerScene({
   outerRef, controlsRef,
   mesh, viewMode, loadAnimSeq,
   openEdgeLinePositions, measureMode, onMeasureResult,
-  clipY, showCoM, explodedView,
+  clipY, showCoM, showDimensions, showNormals, explodedView,
   materialPreset, annotationMode, annotations, onAnnotationPlace,
 }: ViewerSceneProps): JSX.Element {
   const { camera, gl, scene } = useThree()
@@ -379,10 +383,82 @@ function ViewerScene({
   // Measurement label rendered in 3D space via Html
   const [measureLabel, setMeasureLabel] = useState<{ pos: THREE.Vector3; dist: number } | null>(null)
 
+  // Dimension label positions — derived from raw mesh geometry so they sit at the correct
+  // world coords without depending on sceneObj which isn't set yet during memo evaluation.
+  // World X/Z are centred (viewer offsets by -(min+max)/2), so centred coords = geom - centre.
+  const dimBounds = useMemo(() => {
+    if (!showDimensions || !mesh) return null
+    const p = mesh.positions
+    if (p.length < 3) return null
+    let mnX=p[0]!,mxX=p[0]!,mnY=p[1]!,mxY=p[1]!,mnZ=p[2]!,mxZ=p[2]!
+    for (let i=3;i<p.length;i+=3){
+      if(p[i]!<mnX)mnX=p[i]!;   if(p[i]!>mxX)mxX=p[i]!
+      if(p[i+1]!<mnY)mnY=p[i+1]!; if(p[i+1]!>mxY)mxY=p[i+1]!
+      if(p[i+2]!<mnZ)mnZ=p[i+2]!; if(p[i+2]!>mxZ)mxZ=p[i+2]!
+    }
+    const w=mxX-mnX, h=mxY-mnY, d=mxZ-mnZ
+    const PAD=Math.max(8, Math.max(w,h,d)*0.06)
+    const Y0=BED_SURFACE_Y+MODEL_BED_GAP_MM
+    return {
+      w, h, d,
+      wPos: [0,         Y0-PAD*0.4, d/2+PAD ] as [number,number,number],
+      dPos: [w/2+PAD,   Y0-PAD*0.4, 0       ] as [number,number,number],
+      hPos: [w/2+PAD,   Y0+h/2,     d/2+PAD ] as [number,number,number],
+    }
+  }, [mesh, showDimensions])
+
   // Drive explode animation target when the prop toggles
   useEffect(() => {
     explodeTargetRef.current = explodedView ? 1 : 0
   }, [explodedView])
+
+  // Face-normal lines — added as children of model meshes so they inherit world transform
+  useEffect(() => {
+    const removeNormals = (): void => {
+      const toRemove: THREE.Object3D[] = []
+      modelRootRef.current?.traverse((obj) => { if (obj.name === '__normals') toRemove.push(obj) })
+      toRemove.forEach((obj) => {
+        obj.parent?.remove(obj)
+        if (obj instanceof THREE.LineSegments) { obj.geometry.dispose(); (obj.material as THREE.Material).dispose() }
+      })
+    }
+    removeNormals()
+    if (!showNormals || !modelRootRef.current) return
+    const NORMAL_LEN = 3, MAX_PER_MESH = 2000
+    modelRootRef.current.traverse((child) => {
+      if (!(child instanceof THREE.Mesh) || !child.name.startsWith('model')) return
+      const geo = child.geometry as THREE.BufferGeometry
+      const posAttr = geo.attributes.position as THREE.BufferAttribute | undefined
+      if (!posAttr) return
+      const idxAttr = geo.index
+      const triCount = idxAttr ? idxAttr.count / 3 : posAttr.count / 3
+      const stride = Math.max(1, Math.floor(triCount / MAX_PER_MESH))
+      const pts: number[] = []
+      for (let t = 0; t < triCount; t += stride) {
+        const ia = idxAttr ? idxAttr.getX(t*3)   : t*3
+        const ib = idxAttr ? idxAttr.getX(t*3+1) : t*3+1
+        const ic = idxAttr ? idxAttr.getX(t*3+2) : t*3+2
+        const ax=posAttr.getX(ia),ay=posAttr.getY(ia),az=posAttr.getZ(ia)
+        const bx=posAttr.getX(ib),by=posAttr.getY(ib),bz=posAttr.getZ(ib)
+        const cx=posAttr.getX(ic),cy=posAttr.getY(ic),cz=posAttr.getZ(ic)
+        const ox=(ax+bx+cx)/3, oy=(ay+by+cy)/3, oz=(az+bz+cz)/3
+        let nx=(by-ay)*(cz-az)-(bz-az)*(cy-ay)
+        let ny=(bz-az)*(cx-ax)-(bx-ax)*(cz-az)
+        let nz=(bx-ax)*(cy-ay)-(by-ay)*(cx-ax)
+        const l=Math.sqrt(nx*nx+ny*ny+nz*nz); if(l<1e-10) continue
+        nx/=l; ny/=l; nz/=l
+        pts.push(ox,oy,oz, ox+nx*NORMAL_LEN,oy+ny*NORMAL_LEN,oz+nz*NORMAL_LEN)
+      }
+      if (pts.length === 0) return
+      const lg = new THREE.BufferGeometry()
+      lg.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3))
+      const lm = new THREE.LineBasicMaterial({ color: 0x44ff88, depthTest: false, transparent: true, opacity: 0.75 })
+      const ls = new THREE.LineSegments(lg, lm)
+      ls.name = '__normals'; ls.renderOrder = 3
+      child.add(ls)
+    })
+    return removeNormals
+  }, [mesh, showNormals])
 
   // Add lights to scene once; configure key-light shadow map
   useEffect(() => {
@@ -1041,8 +1117,13 @@ function ViewerScene({
       sceneObj = mesh3
     }
 
-    // Sit on bed surface
-    sceneObj.position.y = BED_SURFACE_Y + MODEL_BED_GAP_MM - lb.min.y
+    // Sit on bed surface.  Non-3MF models are snapped to minY=0 on load and after
+    // auto-orient, so lb.min.y=0 and this places the model exactly on the bed.
+    // After a manual rotation (↻X/Z) the model is NOT auto-snapped, so lb.min.y
+    // will be non-zero and the model will visually float — the user can then click
+    // "Snap to bed" to drop it back down.  3MF models are already at minY≈0 from
+    // the slicer so this works unchanged for those too.
+    sceneObj.position.y = BED_SURFACE_Y + MODEL_BED_GAP_MM
 
     // Wrap before scene add — root stays at origin so local space = world space
     const root = new THREE.Group()
@@ -1111,7 +1192,7 @@ function ViewerScene({
       lastSettledSeqRef.current = loadAnimSeq
       const restY = sceneObj.position.y
       const h     = wb.max.y - wb.min.y
-      const lift  = Math.min(165, Math.max(18, h * 0.52))
+      const lift  = Math.min(220, Math.max(40, h * 0.75))
       sceneObj.position.y = restY + lift
       bounceRef.current = { mesh: sceneObj, startY: restY + lift, restY, startTime: -1 }
     }
@@ -1141,6 +1222,19 @@ function ViewerScene({
           <div className="annotation-3d-label">{ann.text}</div>
         </Html>
       ))}
+      {dimBounds ? (
+        <>
+          <Html position={dimBounds.wPos} center zIndexRange={[10, 20]} style={{ pointerEvents: 'none' }}>
+            <div className="dim-label">W {dimBounds.w.toFixed(1)} mm</div>
+          </Html>
+          <Html position={dimBounds.dPos} center zIndexRange={[10, 20]} style={{ pointerEvents: 'none' }}>
+            <div className="dim-label">D {dimBounds.d.toFixed(1)} mm</div>
+          </Html>
+          <Html position={dimBounds.hPos} center zIndexRange={[10, 20]} style={{ pointerEvents: 'none' }}>
+            <div className="dim-label">H {dimBounds.h.toFixed(1)} mm</div>
+          </Html>
+        </>
+      ) : null}
     </>
   )
 }

@@ -9,7 +9,9 @@ import type { ThreeMfBuildObjectSummary, ThreeMfProcessHints, TriangleMesh } fro
 import {
   rotateMeshQuarterTurnAroundY,
   rotateMeshQuarterTurnAroundX,
-  rotateMeshQuarterTurnAroundZ
+  rotateMeshQuarterTurnAroundZ,
+  mirrorMesh,
+  centerMeshOnBed
 } from './mesh/rotateAroundY'
 import { extensionOf, loadModelFromBuffer } from './loaders'
 import {
@@ -197,6 +199,7 @@ function ShortcutsModal({ onClose }: { onClose: () => void }): JSX.Element {
             <tr><td className="sc-key">T</td><td>Toggle turntable (auto-rotate)</td></tr>
             <tr><td className="sc-key">M</td><td>Toggle measure mode</td></tr>
             <tr><td className="sc-key">E</td><td>Toggle open edge highlight</td></tr>
+            <tr><td className="sc-key">[ / ]</td><td>Previous / next plate (multi-plate 3MF)</td></tr>
             <tr><td className="sc-key">Ctrl+Z</td><td>Undo mesh transform</td></tr>
             <tr><td className="sc-key">Ctrl+Y</td><td>Redo mesh transform</td></tr>
             <tr><td className="sc-key">Ctrl+K</td><td>Open command palette</td></tr>
@@ -543,6 +546,8 @@ export function App(): JSX.Element {
   /** Section / clip Y — null means no clip; number is Y height in mm (world space). */
   const [clipY, setClipY] = useState<number | null>(null)
   const [showCoM, setShowCoM] = useState(false)
+  const [showDimensions, setShowDimensions] = useState(false)
+  const [showNormals, setShowNormals] = useState(false)
   /** Scale target input string, e.g. "100" mm along the chosen axis. */
   const [scaleInput, setScaleInput] = useState('')
   const [scaleAxis, setScaleAxis] = useState<'x' | 'y' | 'z' | 'uniform'>('uniform')
@@ -705,12 +710,13 @@ export function App(): JSX.Element {
       setStatus('Load cancelled.')
       return
     }
-    // Auto-orient non-3MF files so the flat base sits on the print bed.
-    // 3MF files are already correctly oriented by the slicer and must not be rotated.
+    // Auto-orient non-3MF files so the flat base sits on the print bed, then snap so
+    // the lowest vertex is exactly at Y=0.  3MF files are already correctly oriented
+    // and positioned by the slicer (minY ≈ 0) and must not be rotated.
     const is3mf = label.toLowerCase().endsWith('.3mf')
     if (!is3mf && loaded.positions.length > 0) {
       const { mesh: oriented } = autoOrientMesh(loaded)
-      loaded = oriented
+      loaded = snapMeshToBed(oriented)
     }
     setFocusedPlateId(null)
     setShowOpenEdges(false)
@@ -1029,6 +1035,44 @@ export function App(): JSX.Element {
     setStatus('Rotated 90° around Z. Export uses this orientation.')
   }, [mesh, applyMeshOp])
 
+  const mirrorX = useCallback(() => {
+    if (!mesh) return
+    applyMeshOp(mirrorMesh(mesh, 'x'))
+    setStatus('Mirrored on X axis.')
+  }, [mesh, applyMeshOp])
+
+  const mirrorY = useCallback(() => {
+    if (!mesh) return
+    applyMeshOp(mirrorMesh(mesh, 'y'))
+    setStatus('Mirrored on Y axis.')
+  }, [mesh, applyMeshOp])
+
+  const mirrorZ = useCallback(() => {
+    if (!mesh) return
+    applyMeshOp(mirrorMesh(mesh, 'z'))
+    setStatus('Mirrored on Z axis.')
+  }, [mesh, applyMeshOp])
+
+  const centerOnBed = useCallback(() => {
+    if (!mesh) return
+    const centered = centerMeshOnBed(mesh)
+    if (centered === mesh) { setStatus('Already centred on bed.'); return }
+    applyMeshOp(centered)
+    setStatus('Centred on bed.')
+  }, [mesh, applyMeshOp])
+
+  const cyclePlate = useCallback((dir: 1 | -1) => {
+    if (!mesh?.plateParts || mesh.plateParts.length === 0) return
+    const ids = [...new Set(mesh.plateParts.map((p) => p.plateId))].sort((a, b) => a - b)
+    if (ids.length < 2) return
+    const curIdx = focusedPlateId !== null ? ids.indexOf(focusedPlateId) : -1
+    const nextIdx = ((curIdx + dir) + ids.length) % ids.length
+    const nextId = ids[nextIdx]!
+    viewerRef.current?.focusCameraOnPlate(nextId)
+    setFocusedPlateId(nextId)
+    setStatus(`Plate ${nextId}`)
+  }, [mesh, focusedPlateId])
+
   const openInSlicer = useCallback(async () => {
     if (!filePath) return
     const err = await window.api.openPath(filePath)
@@ -1085,7 +1129,7 @@ export function App(): JSX.Element {
     setMeasureMode(false);   setMeasureResult(null)
     const { mesh: oriented, bestIdx } = autoOrientMesh(mesh)
     if (bestIdx === 0) { setStatus('Auto-orient: already in optimal orientation.'); return }
-    applyMeshOp(oriented)
+    applyMeshOp(snapMeshToBed(oriented))
     const labels = ['identity', 'X+90°', 'X+180°', 'X-90°', 'Z+90°', 'Z-90°']
     setStatus(`Auto-orient: applied ${labels[bestIdx] ?? 'rotation'} to minimise overhangs.`)
   }, [mesh, applyMeshOp])
@@ -1206,11 +1250,13 @@ export function App(): JSX.Element {
         case 'f': case 'F': if (mesh) setViewMode((v) => v === 'faceOrient' ? 'solid' : 'faceOrient'); break
         case 'h': case 'H': if (mesh) setViewMode((v) => v === 'overhang' ? 'solid' : 'overhang'); break
         case 't': case 'T': if (mesh) setTurntable((v) => !v); break
+        case '[': if (mesh) cyclePlate(-1); break
+        case ']': if (mesh) cyclePlate(1);  break
       }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [busy, aboutOpen, shortcutsOpen, exportMenuOpen, cmdPaletteOpen, mesh, openFile, resetView, saveScreenshot, snapView, toggleMeasureMode, toggleOpenEdges, undo, redo])
+  }, [busy, aboutOpen, shortcutsOpen, exportMenuOpen, cmdPaletteOpen, mesh, openFile, resetView, saveScreenshot, snapView, toggleMeasureMode, toggleOpenEdges, undo, redo, cyclePlate])
 
   const commands = useMemo<Command[]>(() => [
     { id: 'open',        label: 'Open model…',                  run: () => void openFile() },
@@ -1224,6 +1270,12 @@ export function App(): JSX.Element {
     { id: 'rotate-y',    label: 'Rotate 90° Y',                 run: rotateAroundBedY,  disabled: !mesh },
     { id: 'rotate-x',    label: 'Rotate 90° X',                 run: rotateAroundX,     disabled: !mesh },
     { id: 'rotate-z',    label: 'Rotate 90° Z',                 run: rotateAroundZ,     disabled: !mesh },
+    { id: 'mirror-x',    label: 'Mirror X',                     description: 'Flip model on X axis', run: mirrorX, disabled: !mesh },
+    { id: 'mirror-y',    label: 'Mirror Y',                     description: 'Flip model on Y axis', run: mirrorY, disabled: !mesh },
+    { id: 'mirror-z',    label: 'Mirror Z',                     description: 'Flip model on Z axis', run: mirrorZ, disabled: !mesh },
+    { id: 'center-bed',  label: 'Centre on bed',                description: 'Move model XZ centre to bed origin', run: centerOnBed, disabled: !mesh },
+    { id: 'plate-prev',  label: 'Previous plate ([)',           run: () => cyclePlate(-1), disabled: !mesh?.plateParts?.length },
+    { id: 'plate-next',  label: 'Next plate (])',               run: () => cyclePlate(1),  disabled: !mesh?.plateParts?.length },
     { id: 'view-solid',  label: 'View: Solid (S)',               run: () => setViewMode('solid'),       disabled: !mesh },
     { id: 'view-wire',   label: 'View: Wireframe (W)',           run: () => setViewMode('wireframe'),   disabled: !mesh },
     { id: 'view-xray',   label: 'View: Look-through (L)',        run: () => setViewMode('xray'),        disabled: !mesh },
@@ -1247,10 +1299,12 @@ export function App(): JSX.Element {
     { id: 'batch-export',label: 'Batch export all plates as STL', run: () => void batchExportPlates(), disabled: !mesh?.plateParts || mesh.plateParts.length < 2 },
     { id: 'shortcuts',   label: 'Keyboard shortcuts (?)',         run: () => setShortcutsOpen(true) },
     { id: 'settings',    label: 'Settings (⚙)',                   run: () => setSettingsOpen(true) },
-  ], [mesh, meshHistory.length, meshFuture.length, turntable, annotationMode, annotations.length, measureMode, showOpenEdges, filePath,
+    { id: 'dimensions',  label: showDimensions ? 'Dimensions: Hide' : 'Dimensions: Show', run: () => setShowDimensions((v) => !v), disabled: !mesh },
+    { id: 'normals',     label: showNormals ? 'Normals: Hide'    : 'Normals: Show',       run: () => setShowNormals((v) => !v),    disabled: !mesh },
+  ], [mesh, meshHistory.length, meshFuture.length, turntable, annotationMode, annotations.length, measureMode, showOpenEdges, showDimensions, showNormals, filePath,
       openFile, closeModel, openNewModel, undo, redo, runRepair, snapToBed, runAutoOrient,
-      rotateAroundBedY, rotateAroundX, rotateAroundZ, saveScreenshot, toggleOpenEdges,
-      toggleMeasureMode, resetView, openInSlicer, exportAs, batchExportPlates])
+      rotateAroundBedY, rotateAroundX, rotateAroundZ, mirrorX, mirrorY, mirrorZ, centerOnBed, cyclePlate,
+      saveScreenshot, toggleOpenEdges, toggleMeasureMode, resetView, openInSlicer, exportAs, batchExportPlates])
 
   return (
     <div
@@ -1387,6 +1441,22 @@ export function App(): JSX.Element {
             <button type="button" className="btn" onClick={snapToBed} disabled={!mesh || busy}
               title={!mesh ? 'Open a model first' : 'Translate the mesh so its lowest vertex sits exactly on the build plate (Y = 0)'}>
               Snap to bed
+            </button>
+            <button type="button" className="btn" onClick={centerOnBed} disabled={!mesh || busy}
+              title={!mesh ? 'Open a model first' : 'Move the model so its XZ centre is at the bed origin'}>
+              Centre
+            </button>
+            <button type="button" className="btn" onClick={mirrorX} disabled={!mesh || busy}
+              title={!mesh ? 'Open a model first' : 'Mirror on X axis (left ↔ right)'}>
+              ⇔X
+            </button>
+            <button type="button" className="btn" onClick={mirrorY} disabled={!mesh || busy}
+              title={!mesh ? 'Open a model first' : 'Mirror on Y axis (flip upside down)'}>
+              ⇔Y
+            </button>
+            <button type="button" className="btn" onClick={mirrorZ} disabled={!mesh || busy}
+              title={!mesh ? 'Open a model first' : 'Mirror on Z axis (front ↔ back)'}>
+              ⇔Z
             </button>
             <button type="button" className="btn" onClick={runAutoOrient} disabled={!mesh || busy}
               title={!mesh ? 'Open a model first' : 'Try 6 face-down orientations and pick the one with the fewest overhang triangles'}>
@@ -1611,6 +1681,8 @@ export function App(): JSX.Element {
             onMeasureResult={handleMeasureResult}
             clipY={clipY}
             showCoM={showCoM}
+            showDimensions={showDimensions}
+            showNormals={showNormals}
             explodedView={explodedView}
             turntable={turntable}
             materialPreset={materialPreset}
@@ -2009,6 +2081,24 @@ export function App(): JSX.Element {
                       title="Show the bounding-box centre of mass as an orange crosshair"
                     >
                       Centre of mass
+                    </button>
+                    <button
+                      type="button"
+                      className={showDimensions ? 'btn active' : 'btn'}
+                      onClick={() => setShowDimensions((v) => !v)}
+                      disabled={!mesh}
+                      title="Show W × D × H dimension labels on the model"
+                    >
+                      Dimensions
+                    </button>
+                    <button
+                      type="button"
+                      className={showNormals ? 'btn active' : 'btn'}
+                      onClick={() => setShowNormals((v) => !v)}
+                      disabled={!mesh}
+                      title="Show face normals as lines (useful for diagnosing flipped faces)"
+                    >
+                      Normals
                     </button>
                   </div>
                   {meshAnalysis ? (

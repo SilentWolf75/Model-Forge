@@ -34,6 +34,52 @@ function cloneLike(mesh: TriangleMesh, positions: Float32Array): TriangleMesh {
   }
 }
 
+/** Mirror (reflect) the mesh through the bbox-centre plane perpendicular to `axis`.
+ *  Triangle winding is reversed so face normals stay outward-facing after the flip. */
+export function mirrorMesh(mesh: TriangleMesh, axis: 'x' | 'y' | 'z'): TriangleMesh {
+  const p = mesh.positions
+  const { cx, cy, cz } = p.length >= 3 ? bboxCenter(p) : { cx: 0, cy: 0, cz: 0 }
+  const positions = new Float32Array(p.length)
+  for (let i = 0; i < p.length; i += 3) {
+    positions[i]     = axis === 'x' ? 2 * cx - p[i]!     : p[i]!
+    positions[i + 1] = axis === 'y' ? 2 * cy - p[i + 1]! : p[i + 1]!
+    positions[i + 2] = axis === 'z' ? 2 * cz - p[i + 2]! : p[i + 2]!
+  }
+  // Swap vertex 1 & 2 of every triangle to reverse winding
+  const indices = new Uint32Array(mesh.indices)
+  for (let i = 0; i < indices.length; i += 3) {
+    const tmp = indices[i + 1]!; indices[i + 1] = indices[i + 2]!; indices[i + 2] = tmp
+  }
+  const base: TriangleMesh = {
+    positions, indices,
+    ...(mesh.vertexColors ? { vertexColors: new Float32Array(mesh.vertexColors) } : {}),
+    ...(mesh.packageMeta  ? { packageMeta:  mesh.packageMeta  } : {}),
+  }
+  if (!mesh.plateParts?.length) return base
+  return { ...base, plateParts: mesh.plateParts.map((pp) => ({ ...pp, mesh: mirrorMesh(pp.mesh, axis) })) }
+}
+
+/** Translate the mesh so its XZ bounding-box centre sits at (0, 0) — bed centre. */
+export function centerMeshOnBed(mesh: TriangleMesh): TriangleMesh {
+  const p = mesh.positions
+  const { cx, cz } = p.length >= 3 ? bboxCenter(p) : { cx: 0, cy: 0, cz: 0 }
+  if (Math.abs(cx) < 0.001 && Math.abs(cz) < 0.001) return mesh
+  const positions = new Float32Array(p.length)
+  for (let i = 0; i < p.length; i += 3) {
+    positions[i]     = p[i]!     - cx
+    positions[i + 1] = p[i + 1]!
+    positions[i + 2] = p[i + 2]! - cz
+  }
+  const base: TriangleMesh = {
+    positions,
+    indices: new Uint32Array(mesh.indices),
+    ...(mesh.vertexColors ? { vertexColors: new Float32Array(mesh.vertexColors) } : {}),
+    ...(mesh.packageMeta  ? { packageMeta:  mesh.packageMeta  } : {}),
+  }
+  if (!mesh.plateParts?.length) return base
+  return { ...base, plateParts: mesh.plateParts.map((pp) => ({ ...pp, mesh: centerMeshOnBed(pp.mesh) })) }
+}
+
 /** +90° right-handed rotation about world Y through the mesh bounding-box center. */
 export function rotateMeshQuarterTurnAroundY(mesh: TriangleMesh): TriangleMesh {
   const p = mesh.positions

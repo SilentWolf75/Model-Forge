@@ -1530,6 +1530,29 @@ li:last-child .build-object-item-btn {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   DIMENSION 3D LABELS (rendered via drei Html at bbox edges)
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dim-label {
+  background: rgba(12, 14, 20, 0.82);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  color: #e0e8f0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: 0.02em;
+}
+[data-theme='light'] .dim-label {
+  background: rgba(255, 255, 255, 0.90);
+  border-color: rgba(0, 0, 0, 0.15);
+  color: #2a3a4a;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    ANNOTATION SIDEBAR LIST
    ═══════════════════════════════════════════════════════════════════════════ */
 .annotation-list {
