@@ -46,6 +46,7 @@ import { WhatsNew } from './WhatsNew'
 import packageJson from '../../../package.json'
 import { analyzeMesh, printReadinessLines, repairImpactReport } from './mesh/analyze'
 import { openEdgesAsync } from './workers/analysisClient'
+import { estimatePrint, formatPrintTime } from './mesh/printEstimate'
 
 function dataUrlToPngBytes(dataUrl: string): Uint8Array | null {
   const comma = dataUrl.indexOf(',')
@@ -2016,6 +2017,12 @@ export function App(): JSX.Element {
                     const volCm3 = Math.abs(meshAnalysis.signedVolumeMm3) / 1000
                     const { densityGcm3, label } = filamentDensity(mesh.packageMeta?.filamentTypes)
                     const weightG = volCm3 * densityGcm3
+                    const est = estimatePrint(
+                      meshAnalysis.signedVolumeMm3,
+                      meshAnalysis.surfaceAreaMm2,
+                      meshAnalysis.bounds.size[1],
+                      densityGcm3
+                    )
                     return (
                       <>
                         <p className="side-line">
@@ -2023,8 +2030,16 @@ export function App(): JSX.Element {
                           <span className="side-v">{volCm3.toFixed(2)} cm³</span>
                         </p>
                         <p className="side-line">
-                          <span className="side-k">Est. weight ({label})</span>{' '}
+                          <span className="side-k">Weight, solid ({label})</span>{' '}
                           <span className="side-v">{weightG.toFixed(1)} g</span>
+                        </p>
+                        <p className="side-line">
+                          <span className="side-k">Est. print time</span>{' '}
+                          <span className="side-v">{formatPrintTime(est.timeMin)}</span>
+                        </p>
+                        <p className="side-line">
+                          <span className="side-k">Est. filament</span>{' '}
+                          <span className="side-v">{est.weightG.toFixed(1)} g ({est.layers.toLocaleString()} layers)</span>
                         </p>
                       </>
                     )
@@ -2042,7 +2057,10 @@ export function App(): JSX.Element {
                         : ''}
                     </span>
                   </p>
-                  <p className="side-note">Volume assumes a closed, consistently wound mesh. Weight is for solid 100% infill.</p>
+                  <p className="side-note">
+                    Volume assumes a closed, consistently wound mesh. Print estimate: 0.2 mm layers,
+                    15% infill, 3 walls, ~12 mm³/s flow — slicer results will vary.
+                  </p>
                 </>
               ) : null}
             </section>
