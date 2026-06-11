@@ -30,8 +30,11 @@ contextBridge.exposeInMainWorld('api', {
   /** Open a file path in the OS default application (e.g. the default slicer for .3mf). Returns error string or empty string on success. */
   openPath: (filePath: string): Promise<string> => ipcRenderer.invoke('shell:openPath', filePath),
   /** Returns the last 5 files opened in this app (from userData/recent-files.json). */
-  getRecentFiles: (): Promise<Array<{ path: string; name: string; timestamp: number }>> =>
+  getRecentFiles: (): Promise<Array<{ path: string; name: string; timestamp: number; thumb?: string }>> =>
     ipcRenderer.invoke('recent:getList'),
+  /** Attach a small thumbnail data URL to a recent-files entry. */
+  setRecentThumbnail: (filePath: string, thumbDataUrl: string): Promise<void> =>
+    ipcRenderer.invoke('recent:setThumbnail', filePath, thumbDataUrl),
   /** Clears the recent files list. */
   clearRecentFiles: (): Promise<void> => ipcRenderer.invoke('recent:clear'),
   /** Get persisted app settings. */

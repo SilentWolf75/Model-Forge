@@ -109,7 +109,7 @@ function statusClass(s: string): string {
 
 const idleStatusMessage = 'Open a model to begin. Formats: STL OBJ 3MF GLB GLTF AMF PLY FBX STEP/STP'
 
-type RecentFile = { path: string; name: string; timestamp: number }
+type RecentFile = { path: string; name: string; timestamp: number; thumb?: string }
 
 function SettingsModal({ onClose, bedSizeMm, onBedSizeChange }: {
   onClose: () => void
@@ -561,6 +561,40 @@ export function App(): JSX.Element {
     void window.api.getRecentFiles().then(setRecentFiles).catch(() => {})
   }, [])
 
+  /** Path of the most recent successful load — lets delayed thumbnail captures abort if superseded. */
+  const thumbnailPathRef = useRef<string | null>(null)
+
+  /**
+   * Capture a small viewport thumbnail for the recent-files list.  Waits for
+   * the camera framing + settle bounce to finish so the shot shows the model,
+   * then centre-crops to 96×72 JPEG (~4 KB) and stores it with the entry.
+   */
+  const captureRecentThumbnail = useCallback((path: string) => {
+    thumbnailPathRef.current = path
+    window.setTimeout(() => {
+      if (thumbnailPathRef.current !== path || !meshRef.current) return
+      const dataUrl = viewerRef.current?.captureScreenshot()
+      if (!dataUrl) return
+      const img = new Image()
+      img.onload = () => {
+        if (thumbnailPathRef.current !== path) return
+        const TW = 96, TH = 72
+        const canvas = document.createElement('canvas')
+        canvas.width = TW; canvas.height = TH
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        const scale = Math.max(TW / img.width, TH / img.height)
+        const sw = TW / scale, sh = TH / scale
+        ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, TW, TH)
+        const thumb = canvas.toDataURL('image/jpeg', 0.72)
+        void window.api.setRecentThumbnail(path, thumb)
+          .then(() => window.api.getRecentFiles().then(setRecentFiles))
+          .catch(() => {})
+      }
+      img.src = dataUrl
+    }, 1600)
+  }, [])
+
   useEffect(() => {
     if (!mesh) {
       setExportMenuOpen(false)
@@ -701,6 +735,7 @@ export function App(): JSX.Element {
       if (!loadCancelledRef.current && recentPath) {
         void window.api.addRecentDocument(recentPath)
         void window.api.getRecentFiles().then(setRecentFiles).catch(() => {})
+        captureRecentThumbnail(recentPath)
       }
       setFilePath(recentPath ?? null)
     } catch (e) {
@@ -712,7 +747,7 @@ export function App(): JSX.Element {
       setBusy(false)
       setLoadPhase(null)
     }
-  }, [performMeshLoad])
+  }, [performMeshLoad, captureRecentThumbnail])
 
   const loadFileFromPath = useCallback(
     async (path: string) => {
@@ -727,6 +762,7 @@ export function App(): JSX.Element {
         if (!loadCancelledRef.current) {
           void window.api.addRecentDocument(path)
           void window.api.getRecentFiles().then(setRecentFiles).catch(() => {})
+          captureRecentThumbnail(path)
         }
         setFilePath(path)
       } catch (e) {
@@ -739,7 +775,7 @@ export function App(): JSX.Element {
         setLoadPhase(null)
       }
     },
-    [performMeshLoad]
+    [performMeshLoad, captureRecentThumbnail]
   )
 
   /** Always load from the File object buffer — avoids Electron path quirks and matches “Open” behavior. */
@@ -1803,7 +1839,11 @@ export function App(): JSX.Element {
                         title={f.path}
                         onClick={() => void loadFileFromPath(f.path)}
                       >
-                        <span className="recent-file-badge">{fileExtBadge(f.name)}</span>
+                        {f.thumb ? (
+                          <img className="recent-file-thumb" src={f.thumb} alt="" aria-hidden />
+                        ) : (
+                          <span className="recent-file-badge">{fileExtBadge(f.name)}</span>
+                        )}
                         <span className="recent-file-name">{f.name}</span>
                         <span className="recent-file-time">{formatTimestamp(f.timestamp)}</span>
                       </button>

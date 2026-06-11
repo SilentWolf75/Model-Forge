@@ -13,7 +13,9 @@ export interface AppApi {
   /** Open a file path in the OS default application. Returns error string or empty on success. */
   openPath: (filePath: string) => Promise<string>
   /** Returns the last 5 files opened in this app. */
-  getRecentFiles: () => Promise<Array<{ path: string; name: string; timestamp: number }>>
+  getRecentFiles: () => Promise<Array<{ path: string; name: string; timestamp: number; thumb?: string }>>
+  /** Attach a small thumbnail data URL to a recent-files entry. */
+  setRecentThumbnail: (filePath: string, thumbDataUrl: string) => Promise<void>
   /** Clears the recent files list. */
   clearRecentFiles: () => Promise<void>
   /** Get persisted app settings. */

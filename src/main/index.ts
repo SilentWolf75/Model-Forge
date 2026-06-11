@@ -336,6 +336,22 @@ if (!app.requestSingleInstanceLock()) {
       }
     })
 
+    ipcMain.handle('recent:setThumbnail', (_, filePath: string, thumbDataUrl: string) => {
+      if (typeof filePath !== 'string' || typeof thumbDataUrl !== 'string') return
+      // Small JPEG/PNG data URLs only — a 96px thumbnail is ~3-8 KB
+      if (!thumbDataUrl.startsWith('data:image/') || thumbDataUrl.length > 100_000) return
+      try {
+        const listPath = join(app.getPath('userData'), 'recent-files.json')
+        if (!existsSync(listPath)) return
+        type RecentEntry = { path: string; name: string; timestamp: number; thumb?: string }
+        const list = JSON.parse(readFileSync(listPath, 'utf8')) as RecentEntry[]
+        const entry = Array.isArray(list) ? list.find((f) => f.path === filePath) : undefined
+        if (!entry) return
+        entry.thumb = thumbDataUrl
+        writeFileSync(listPath, JSON.stringify(list), 'utf8')
+      } catch { /* ignore disk errors */ }
+    })
+
     ipcMain.handle('recent:clear', () => {
       try {
         const listPath = join(app.getPath('userData'), 'recent-files.json')

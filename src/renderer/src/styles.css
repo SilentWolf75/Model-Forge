@@ -916,6 +916,19 @@ li:last-child .build-object-item-btn {
   line-height: 1.6;
 }
 
+.recent-file-thumb {
+  width: 36px;
+  height: 27px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  flex-shrink: 0;
+  display: block;
+}
+[data-theme='light'] .recent-file-thumb {
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
 .recent-file-name {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: nowrap;
