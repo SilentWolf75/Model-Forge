@@ -46,6 +46,10 @@ Grab the latest build from the [Releases](https://github.com/SilentWolf75/Model-
 - **Rotate** — 90° steps around X, Y, and Z axes
 - **Mesh repair** — removes degenerate triangles and welds open seams
 - **Open edge detection** — highlights non-watertight boundary edges in orange
+- **Move mode** — drag the model across the bed with the mouse; exact in exports
+- **Mirror X/Y/Z** — flip the model on any axis
+- **Add model** — merge a second file into the scene, auto-placed beside the first
+- **Wall thickness heat map** — ray-cast per-face thickness: red < 0.8 mm → green > 3 mm
 
 ### Overhang Analysis
 
@@ -67,7 +71,7 @@ Full support for the 3MF format, including multi-plate layouts, AMS color data, 
 
 ### Viewing
 
-- Solid, Wireframe, Look-through, Face-orient, and Overhang view modes
+- Solid, Wireframe, Look-through, Face-orient, Overhang, and Wall-thickness view modes
 - Screen-space ambient occlusion for realistic depth
 - Turntable auto-rotate for hands-free presentation
 - Exploded view for multi-body models
@@ -79,7 +83,7 @@ Full support for the 3MF format, including multi-plate layouts, AMS color data, 
 - Vertex and triangle count
 - Bounding box dimensions (X × Y × Z mm)
 - Surface area and volume
-- Estimated print weight (PLA density)
+- Estimated print time, filament weight, and layer count
 - Shell count and overhang percentage
 - Print readiness checklist with actionable tips
 - Slicer package metadata (printer, bed, layer height, nozzle)
@@ -91,7 +95,7 @@ Full support for the 3MF format, including multi-plate layouts, AMS color data, 
 | **Measure** | Click two points on the model — get the straight-line distance in mm |
 | **Annotations** | Pin text notes to any point on the model surface |
 | **Command palette** `Ctrl+K` | Fuzzy search across all app actions |
-| **Undo / Redo** `Ctrl+Z` / `Ctrl+Y` | 10-step history for all mesh operations |
+| **Undo / Redo** `Ctrl+Z` / `Ctrl+Y` | 50-step history for all mesh operations |
 | **Screenshot** | Export the current viewport as PNG |
 | **Open in slicer** | Send the file directly to your default slicer app |
 | **Batch export** | Export all plates of a multi-plate 3MF to individual STL files |
@@ -120,6 +124,10 @@ Full support for the 3MF format, including multi-plate layouts, AMS color data, 
 | `O` | Open file |
 | `W` / `S` / `L` | Wireframe / Solid / Look-through |
 | `H` | Overhang heat map |
+| `A` | Wall thickness heat map |
+| `G` | Move mode (drag model on bed) |
+| `M` | Measure mode |
+| `[` / `]` | Previous / next plate |
 | `T` | Toggle turntable |
 | `R` | Reset camera |
 | `P` | Screenshot |
