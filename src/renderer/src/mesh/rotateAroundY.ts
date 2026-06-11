@@ -62,7 +62,7 @@ export function mirrorMesh(mesh: TriangleMesh, axis: 'x' | 'y' | 'z'): TriangleM
 /** Translate the mesh so its XZ bounding-box centre sits at (0, 0) — bed centre. */
 export function centerMeshOnBed(mesh: TriangleMesh): TriangleMesh {
   const p = mesh.positions
-  const { cx, cz } = p.length >= 3 ? bboxCenter(p) : { cx: 0, cy: 0, cz: 0 }
+  const { cx, cz } = p.length >= 3 ? bboxCenter(p) : { cx: 0, cz: 0 }
   if (Math.abs(cx) < 0.001 && Math.abs(cz) < 0.001) return mesh
   const positions = new Float32Array(p.length)
   for (let i = 0; i < p.length; i += 3) {

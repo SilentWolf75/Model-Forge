@@ -1380,7 +1380,7 @@ export const R3FViewer = forwardRef<ViewerHandle, Props>(function R3FViewer(prop
   return (
     <div className="viewer-canvas" style={{ width: '100%', height: '100%', display: 'block', overflow: 'hidden' }}>
       <Canvas
-        shadows={THREE.PCFShadowMap}
+        shadows="percentage"
         gl={{ preserveDrawingBuffer: true, antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 0.9 }}
         camera={{ fov: 45, near: 0.01, far: 20000, position: [-291, 167, 18] }}
         style={{ width: '100%', height: '100%' }}

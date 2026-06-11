@@ -7,18 +7,28 @@ import {
 } from './viewer/cameraPrefs'
 import type { ThreeMfBuildObjectSummary, ThreeMfProcessHints, TriangleMesh } from './mesh/types'
 import {
-  rotateMeshQuarterTurnAroundY,
-  rotateMeshQuarterTurnAroundX,
-  rotateMeshQuarterTurnAroundZ,
-  mirrorMesh,
-  centerMeshOnBed
-} from './mesh/rotateAroundY'
-import {
   snapMeshToBed,
-  scaleMesh,
+  translateMesh,
   extractPlateMesh,
   autoOrientMesh
 } from './mesh/transform'
+import {
+  applyMeshTransformOp,
+  invertOp,
+  meshMinY,
+  meshCenterXZ,
+  type MeshOp
+} from './mesh/history'
+
+/**
+ * Undo history entry: invertible transforms store only an op descriptor;
+ * non-invertible changes (repair, add model) store a full mesh snapshot.
+ */
+type HistoryEntry =
+  | { type: 'op'; op: MeshOp }
+  | { type: 'snapshot'; mesh: TriangleMesh }
+
+const MAX_HISTORY = 50
 import { extensionOf, loadModelFromBuffer } from './loaders'
 import {
   readStoredStepTessellationPreset,
@@ -508,8 +518,8 @@ export function App(): JSX.Element {
   const [pendingAnnotationPos, setPendingAnnotationPos] = useState<[number, number, number] | null>(null)
   const [pendingAnnotationText, setPendingAnnotationText] = useState('')
   const nextAnnotationId = useRef(1)
-  const [meshHistory, setMeshHistory] = useState<TriangleMesh[]>([])
-  const [meshFuture, setMeshFuture] = useState<TriangleMesh[]>([])
+  const [meshHistory, setMeshHistory] = useState<HistoryEntry[]>([])
+  const [meshFuture, setMeshFuture] = useState<HistoryEntry[]>([])
   const meshRef = useRef<TriangleMesh | null>(null)
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false)
   const exportDropdownRef   = useRef<HTMLDivElement>(null)
@@ -818,13 +828,34 @@ export function App(): JSX.Element {
     await openFile()
   }, [openFile])
 
-  /** Apply a mesh transform: push current mesh to history, clear redo stack, set new mesh. */
+  /**
+   * Apply an invertible transform op.  The undo stack stores only the inverse
+   * descriptor (a few bytes) instead of a full mesh clone, so history memory
+   * no longer scales with model size.  Pass `precomputed` when the result was
+   * already calculated (e.g. auto-orient probes all orientations anyway).
+   */
+  const performOp = useCallback((op: MeshOp, precomputed?: TriangleMesh) => {
+    const cur = meshRef.current
+    if (!cur) return
+    const next = precomputed ?? applyMeshTransformOp(cur, op)
+    setMeshHistory((h) => {
+      const nx: HistoryEntry[] = [...h, { type: 'op', op: invertOp(op) }]
+      return nx.length > MAX_HISTORY ? nx.slice(-MAX_HISTORY) : nx
+    })
+    setMeshFuture([])
+    setMesh(next)
+  }, [])
+
+  /**
+   * Apply a non-invertible change (repair, add model): history keeps a full
+   * snapshot of the previous mesh.  These are rare, so the memory cost is fine.
+   */
   const applyMeshOp = useCallback((newMesh: TriangleMesh) => {
     const prev = meshRef.current
     if (prev) {
       setMeshHistory((h) => {
-        const next = [...h, prev]
-        return next.length > 10 ? next.slice(-10) : next
+        const next: HistoryEntry[] = [...h, { type: 'snapshot', mesh: prev }]
+        return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next
       })
     }
     setMeshFuture([])
@@ -834,11 +865,17 @@ export function App(): JSX.Element {
   const undo = useCallback(() => {
     setMeshHistory((h) => {
       if (h.length === 0) return h
-      const prev = h[h.length - 1]!
+      const entry = h[h.length - 1]!
       const remaining = h.slice(0, -1)
       const curr = meshRef.current
-      if (curr) setMeshFuture((f) => [...f, curr])
-      setMesh(prev)
+      if (!curr) return h
+      if (entry.type === 'op') {
+        setMeshFuture((f) => [...f, { type: 'op', op: invertOp(entry.op) }])
+        setMesh(applyMeshTransformOp(curr, entry.op))
+      } else {
+        setMeshFuture((f) => [...f, { type: 'snapshot', mesh: curr }])
+        setMesh(entry.mesh)
+      }
       setStatus('Undo.')
       return remaining
     })
@@ -847,14 +884,23 @@ export function App(): JSX.Element {
   const redo = useCallback(() => {
     setMeshFuture((f) => {
       if (f.length === 0) return f
-      const next = f[f.length - 1]!
+      const entry = f[f.length - 1]!
       const remaining = f.slice(0, -1)
       const curr = meshRef.current
-      if (curr) setMeshHistory((h) => {
-        const nx = [...h, curr]
-        return nx.length > 10 ? nx.slice(-10) : nx
-      })
-      setMesh(next)
+      if (!curr) return f
+      if (entry.type === 'op') {
+        setMeshHistory((h) => {
+          const nx: HistoryEntry[] = [...h, { type: 'op', op: invertOp(entry.op) }]
+          return nx.length > MAX_HISTORY ? nx.slice(-MAX_HISTORY) : nx
+        })
+        setMesh(applyMeshTransformOp(curr, entry.op))
+      } else {
+        setMeshHistory((h) => {
+          const nx: HistoryEntry[] = [...h, { type: 'snapshot', mesh: curr }]
+          return nx.length > MAX_HISTORY ? nx.slice(-MAX_HISTORY) : nx
+        })
+        setMesh(entry.mesh)
+      }
       setStatus('Redo.')
       return remaining
     })
@@ -954,61 +1000,67 @@ export function App(): JSX.Element {
     if (!mesh) return
     setShowOpenEdges(false); setOpenEdgeResult(null)
     setMeasureMode(false);   setMeasureResult(null)
-    const snapped = snapMeshToBed(mesh)
-    if (snapped === mesh) { setStatus('Model is already on the bed.'); return }
-    applyMeshOp(snapped)
+    const minY = meshMinY(mesh)
+    if (!Number.isFinite(minY) || Math.abs(minY) < 0.001) { setStatus('Model is already on the bed.'); return }
+    performOp({ kind: 'translate', dx: 0, dy: -minY, dz: 0 })
     setStatus('Snapped to bed.')
-  }, [mesh, applyMeshOp])
+  }, [mesh, performOp])
 
   const rotateAroundBedY = useCallback(() => {
     if (!mesh) return
     setShowOpenEdges(false); setOpenEdgeResult(null)
     setMeasureMode(false);   setMeasureResult(null)
-    applyMeshOp(rotateMeshQuarterTurnAroundY(mesh))
+    performOp({ kind: 'rotateY', quarterTurns: 1 })
     setStatus('Rotated 90° around the bed (Y). Export uses this orientation.')
-  }, [mesh, applyMeshOp])
+  }, [mesh, performOp])
 
   const rotateAroundX = useCallback(() => {
     if (!mesh) return
     setShowOpenEdges(false); setOpenEdgeResult(null)
     setMeasureMode(false);   setMeasureResult(null)
-    applyMeshOp(rotateMeshQuarterTurnAroundX(mesh))
+    performOp({ kind: 'rotateX', quarterTurns: 1 })
     setStatus('Rotated 90° around X. Export uses this orientation.')
-  }, [mesh, applyMeshOp])
+  }, [mesh, performOp])
 
   const rotateAroundZ = useCallback(() => {
     if (!mesh) return
     setShowOpenEdges(false); setOpenEdgeResult(null)
     setMeasureMode(false);   setMeasureResult(null)
-    applyMeshOp(rotateMeshQuarterTurnAroundZ(mesh))
+    performOp({ kind: 'rotateZ', quarterTurns: 1 })
     setStatus('Rotated 90° around Z. Export uses this orientation.')
-  }, [mesh, applyMeshOp])
+  }, [mesh, performOp])
 
   const mirrorX = useCallback(() => {
     if (!mesh) return
-    applyMeshOp(mirrorMesh(mesh, 'x'))
+    setShowOpenEdges(false); setOpenEdgeResult(null)
+    setMeasureMode(false);   setMeasureResult(null)
+    performOp({ kind: 'mirror', axis: 'x' })
     setStatus('Mirrored on X axis.')
-  }, [mesh, applyMeshOp])
+  }, [mesh, performOp])
 
   const mirrorY = useCallback(() => {
     if (!mesh) return
-    applyMeshOp(mirrorMesh(mesh, 'y'))
+    setShowOpenEdges(false); setOpenEdgeResult(null)
+    setMeasureMode(false);   setMeasureResult(null)
+    performOp({ kind: 'mirror', axis: 'y' })
     setStatus('Mirrored on Y axis.')
-  }, [mesh, applyMeshOp])
+  }, [mesh, performOp])
 
   const mirrorZ = useCallback(() => {
     if (!mesh) return
-    applyMeshOp(mirrorMesh(mesh, 'z'))
+    setShowOpenEdges(false); setOpenEdgeResult(null)
+    setMeasureMode(false);   setMeasureResult(null)
+    performOp({ kind: 'mirror', axis: 'z' })
     setStatus('Mirrored on Z axis.')
-  }, [mesh, applyMeshOp])
+  }, [mesh, performOp])
 
   const centerOnBed = useCallback(() => {
     if (!mesh) return
-    const centered = centerMeshOnBed(mesh)
-    if (centered === mesh) { setStatus('Already centred on bed.'); return }
-    applyMeshOp(centered)
+    const { cx, cz } = meshCenterXZ(mesh)
+    if (Math.abs(cx) < 0.001 && Math.abs(cz) < 0.001) { setStatus('Already centred on bed.'); return }
+    performOp({ kind: 'translate', dx: -cx, dy: 0, dz: -cz })
     setStatus('Centred on bed.')
-  }, [mesh, applyMeshOp])
+  }, [mesh, performOp])
 
   const cyclePlate = useCallback((dir: 1 | -1) => {
     if (!mesh?.plateParts || mesh.plateParts.length === 0) return
@@ -1078,10 +1130,22 @@ export function App(): JSX.Element {
     setMeasureMode(false);   setMeasureResult(null)
     const { mesh: oriented, bestIdx } = autoOrientMesh(mesh)
     if (bestIdx === 0) { setStatus('Auto-orient: already in optimal orientation.'); return }
-    applyMeshOp(snapMeshToBed(oriented))
+    // Express the winning orientation as an invertible op (rotation + snap translate)
+    const rotOps: MeshOp[] = [
+      { kind: 'rotateX', quarterTurns: 1 }, { kind: 'rotateX', quarterTurns: 2 },
+      { kind: 'rotateX', quarterTurns: 3 }, { kind: 'rotateZ', quarterTurns: 1 },
+      { kind: 'rotateZ', quarterTurns: 3 },
+    ]
+    const rotOp = rotOps[bestIdx - 1]!
+    const minY = meshMinY(oriented)
+    const needsSnap = Number.isFinite(minY) && Math.abs(minY) >= 0.001
+    const op: MeshOp = needsSnap
+      ? { kind: 'composite', ops: [rotOp, { kind: 'translate', dx: 0, dy: -minY, dz: 0 }] }
+      : rotOp
+    performOp(op, needsSnap ? translateMesh(oriented, 0, -minY, 0) : oriented)
     const labels = ['identity', 'X+90°', 'X+180°', 'X-90°', 'Z+90°', 'Z-90°']
     setStatus(`Auto-orient: applied ${labels[bestIdx] ?? 'rotation'} to minimise overhangs.`)
-  }, [mesh, applyMeshOp])
+  }, [mesh, performOp])
 
   const batchExportPlates = useCallback(async () => {
     if (!mesh?.plateParts || mesh.plateParts.length === 0) return
@@ -1138,9 +1202,9 @@ export function App(): JSX.Element {
     else current = Math.max(dx, dy, dz)
     if (!Number.isFinite(current) || current <= 0) { setStatus('Cannot compute current size.'); return }
     const factor = target / current
-    applyMeshOp(scaleMesh(mesh, factor))
+    performOp({ kind: 'scale', factor })
     setStatus(`Scaled ×${factor.toFixed(4)} → ${target} mm${scaleAxis !== 'uniform' ? ` (${scaleAxis.toUpperCase()})` : ''}.`)
-  }, [mesh, meshAnalysis, scaleInput, scaleAxis, applyMeshOp])
+  }, [mesh, meshAnalysis, scaleInput, scaleAxis, performOp])
 
   const saveScreenshot = useCallback(async () => {
     if (!mesh) return
