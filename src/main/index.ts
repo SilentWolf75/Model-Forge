@@ -118,6 +118,41 @@ const UPDATE_REPO  = 'SilentWolf75/Model-Forge'
 // Never hardcode it here — GitHub will auto-revoke any token committed to the repo.
 const UPDATE_TOKEN = (import.meta.env['MAIN_VITE_UPDATE_TOKEN'] as string) ?? ''
 
+type ReleaseAsset = { name: string; url: string; browser_download_url: string }
+
+/**
+ * Download the new installer to temp and launch it, then quit so NSIS can
+ * replace the running app.  Returns false on any failure so the caller can
+ * fall back to opening the release page.
+ */
+async function downloadAndRunInstaller(win: BrowserWindow, asset: ReleaseAsset): Promise<boolean> {
+  try {
+    win.setProgressBar(2, { mode: 'indeterminate' })
+    // The asset endpoint 302-redirects to signed storage; Node's fetch drops the
+    // Authorization header on the cross-origin hop, which is exactly right.
+    const res = await fetch(asset.url, {
+      headers: {
+        'User-Agent':    'Model-Forge-Updater',
+        'Accept':        'application/octet-stream',
+        'Authorization': `Bearer ${UPDATE_TOKEN}`
+      }
+    })
+    if (!res.ok) return false
+    const buf = Buffer.from(await res.arrayBuffer())
+    const exePath = join(app.getPath('temp'), asset.name)
+    await writeFile(exePath, buf)
+    const err = await shell.openPath(exePath)
+    if (err) return false
+    // Give the installer a moment to start, then quit so files aren't locked
+    setTimeout(() => app.quit(), 800)
+    return true
+  } catch {
+    return false
+  } finally {
+    if (!win.isDestroyed()) win.setProgressBar(-1)
+  }
+}
+
 async function checkForUpdates(win: BrowserWindow): Promise<void> {
   if (!UPDATE_TOKEN) return
   try {
@@ -132,10 +167,44 @@ async function checkForUpdates(win: BrowserWindow): Promise<void> {
       }
     )
     if (!res.ok) return
-    const data = await res.json() as { tag_name: string; html_url: string }
+    const data = await res.json() as { tag_name: string; html_url: string; assets?: ReleaseAsset[] }
     const latest  = data.tag_name.replace(/^v/, '')
     const current = app.getVersion()
     if (latest === current) return
+
+    // Windows: offer one-click download + install of the Setup exe
+    const setupAsset = process.platform === 'win32'
+      ? data.assets?.find((a) => a.name.endsWith('-Setup.exe'))
+      : undefined
+
+    if (setupAsset) {
+      const { response } = await dialog.showMessageBox(win, {
+        type:      'info',
+        title:     'Update Available',
+        message:   `Model Forge ${data.tag_name} is available`,
+        detail:    `You are running v${current}.\n\nInstall now downloads the update and starts the installer — the app will close.`,
+        buttons:   ['Install now', 'Open download page', 'Later'],
+        defaultId: 0,
+        cancelId:  2
+      })
+      if (response === 0) {
+        const ok = await downloadAndRunInstaller(win, setupAsset)
+        if (!ok) {
+          await dialog.showMessageBox(win, {
+            type: 'warning',
+            title: 'Update download failed',
+            message: 'Could not download the installer. Opening the release page instead.',
+            buttons: ['OK']
+          })
+          void shell.openExternal(data.html_url)
+        }
+      } else if (response === 1) {
+        void shell.openExternal(data.html_url)
+      }
+      return
+    }
+
+    // Mac / fallback: open the release page
     const { response } = await dialog.showMessageBox(win, {
       type:      'info',
       title:     'Update Available',
@@ -145,7 +214,7 @@ async function checkForUpdates(win: BrowserWindow): Promise<void> {
       defaultId: 0,
       cancelId:  1
     })
-    if (response === 0) shell.openExternal(data.html_url)
+    if (response === 0) void shell.openExternal(data.html_url)
   } catch {
     // Best-effort — silently ignore network errors
   }
