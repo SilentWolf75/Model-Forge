@@ -855,43 +855,6 @@ export function App(): JSX.Element {
     setStatus(idleStatusMessage)
   }, [])
 
-  /**
-   * Load another model file and merge it into the current scene as an extra
-   * shell, auto-placed beside the existing geometry.  History keeps a snapshot
-   * so the add is undoable.  Plain meshes only (no multi-plate layouts).
-   */
-  const addModel = useCallback(async () => {
-    const base = meshRef.current
-    if (!base || base.plateParts?.length) return
-    const path = await window.api.openFileDialog()
-    if (!path) return
-    loadCancelledRef.current = false
-    setBusy(true)
-    setLoadPhase('Loading model to add…')
-    try {
-      const raw = await window.api.readFile(path)
-      const data = raw instanceof Uint8Array ? raw : new Uint8Array(raw)
-      const onProgress = (phase: string): void => { setLoadPhase(phase); setStatus(phase) }
-      let extra = await loadModelFromBuffer(path, data, onProgress, stepTessellationParams(stepTessPreset))
-      if (loadCancelledRef.current) { setStatus('Add cancelled.'); return }
-      if (extra.plateParts?.length) {
-        setStatus('Multi-plate files cannot be added to a scene — open them on their own.')
-        return
-      }
-      if (extra.positions.length === 0) { setStatus('File contains no geometry.'); return }
-      if (!path.toLowerCase().endsWith('.3mf')) extra = autoOrientMesh(extra).mesh
-      applyMeshOp(addMeshBeside(base, extra, 10))
-      const name = path.split(/[/\\]/).pop() ?? path
-      setStatus(`Added ${name} beside the current model. Use Move (G) to arrange.`)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setStatus(`Add model error: ${msg}`)
-    } finally {
-      setBusy(false)
-      setLoadPhase(null)
-    }
-  }, [applyMeshOp, stepTessPreset])
-
   /** Clears the plate, then opens the file picker for the next model. */
   const openNewModel = useCallback(async () => {
     setMesh(null)
@@ -1007,6 +970,44 @@ export function App(): JSX.Element {
     ])
     setStatus(`Repaired — ${report.removedDegenerate} degenerate triangles removed.`)
   }, [mesh, applyMeshOp])
+
+  /**
+   * Load another model file and merge it into the current scene as an extra
+   * shell, auto-placed beside the existing geometry.  History keeps a snapshot
+   * so the add is undoable.  Plain meshes only (no multi-plate layouts).
+   */
+  const addModel = useCallback(async () => {
+    const base = meshRef.current
+    if (!base || base.plateParts?.length) return
+    const path = await window.api.openFileDialog()
+    if (!path) return
+    loadCancelledRef.current = false
+    setBusy(true)
+    setLoadPhase('Loading model to add…')
+    try {
+      const raw = await window.api.readFile(path)
+      const data = raw instanceof Uint8Array ? raw : new Uint8Array(raw)
+      const onProgress = (phase: string): void => { setLoadPhase(phase); setStatus(phase) }
+      let extra = await loadModelFromBuffer(path, data, onProgress, stepTessellationParams(stepTessPreset))
+      if (loadCancelledRef.current) { setStatus('Add cancelled.'); return }
+      if (extra.plateParts?.length) {
+        setStatus('Multi-plate files cannot be added to a scene — open them on their own.')
+        return
+      }
+      if (extra.positions.length === 0) { setStatus('File contains no geometry.'); return }
+      if (!path.toLowerCase().endsWith('.3mf')) extra = autoOrientMesh(extra).mesh
+      applyMeshOp(addMeshBeside(base, extra, 10))
+      const name = path.split(/[/\\]/).pop() ?? path
+      setStatus(`Added ${name} beside the current model. Use Move (G) to arrange.`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Add model error: ${msg}`)
+    } finally {
+      setBusy(false)
+      setLoadPhase(null)
+    }
+  }, [applyMeshOp, stepTessPreset])
+
 
   const exportAs = useCallback(
     async (kind: 'stl' | 'obj' | '3mf') => {
