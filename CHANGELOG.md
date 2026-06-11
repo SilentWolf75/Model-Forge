@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.0 Alpha 7 — unreleased
+
+### Features
+- **Move mode (G):** Drag the model across the bed with the mouse — orbit pauses while dragging, the blob shadow follows live, and the move commits as an undoable translate that is exact in exports. Plain meshes are now normalised at load (XZ centred, Y snapped) so Move / Centre-on-bed are visible operations.
+- **Add model to scene:** Load a second STL/OBJ/STEP/… file and merge it beside the current model with automatic placement (10 mm clearance, bed-aligned, Z-centred). Vertex colours are preserved. Arrange with Move, export as one file.
+- **Print estimates for every model:** New layer-based estimator (0.2 mm layers, 15% infill, 3 walls, ~12 mm³/s flow) shows estimated print time, filament grams and layer count in the Mesh panel — previously only available for 3MFs with slicer hints.
+- **Recent files thumbnails:** The recent-files list now shows a small snapshot of each model, captured automatically after load.
+- **One-click updates (Windows):** The update dialog can now download the new installer and launch it directly instead of opening the release page.
+
+### Accuracy
+- **Wall thickness is now ray-cast:** Inward rays (Möller–Trumbore through a voxel grid) measure true perpendicular wall thickness like a slicer — accurate on curved shells where the old opposing-centroid heuristic over-reported.
+
+### Performance
+- **Operation-based undo:** History stores tiny operation descriptors instead of full mesh clones — undo memory no longer scales with model size (was up to ~36 MB per step on 1M-triangle models). History depth raised 10 → 50.
+- **No scene rebuild on transform:** Rotate / mirror-undo / snap / move patch the existing GPU buffers in place; the camera no longer reframes on every rotate.
+- **Analysis off the main thread:** Wall thickness and open-edge detection run in a Web Worker — the UI never freezes during analysis.
+- **Faster startup:** The 7.6 MB STEP kernel (occt-import-js) now loads only when a STEP file is opened.
+
+### Project
+- **Unit tests:** 52 vitest tests cover the mesh math (rotations, mirror winding, snap, centre, scale, merge placement, overhang scoring, wall-thickness classification, print estimates, undo round-trips). Tests run in CI on every push and before release builds.
+- **CI on Node 24** (GitHub Actions deprecation of Node 20).
+
 ## 2.0 Alpha 6 — 2026-05-31
 
 - **Mirror X/Y/Z:** New toolbar buttons (⇔X, ⇔Y, ⇔Z) flip the model on any axis through its bounding-box centre. Triangle winding order is reversed automatically so normals stay outward-facing after the reflection.
