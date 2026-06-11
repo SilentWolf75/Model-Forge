@@ -45,7 +45,7 @@ import { DISPLAY_VERSION } from './version'
 import { WhatsNew } from './WhatsNew'
 import packageJson from '../../../package.json'
 import { analyzeMesh, printReadinessLines, repairImpactReport } from './mesh/analyze'
-import { findOpenEdges } from './mesh/openEdges'
+import { openEdgesAsync } from './workers/analysisClient'
 
 function dataUrlToPngBytes(dataUrl: string): Uint8Array | null {
   const comma = dataUrl.indexOf(',')
@@ -1093,14 +1093,18 @@ export function App(): JSX.Element {
       setOpenEdgeResult(null)
       return
     }
-    const result = findOpenEdges(mesh)
-    setOpenEdgeResult(result)
-    setShowOpenEdges(true)
-    setStatus(
-      result.count === 0
-        ? 'No open edges found — mesh appears watertight.'
-        : `Found ${result.count.toLocaleString()} open edge${result.count === 1 ? '' : 's'} (shown in orange).`
-    )
+    setStatus('Analysing edges…')
+    void openEdgesAsync(mesh).then((result) => {
+      // Discard stale results if the model changed while the worker was busy
+      if (meshRef.current !== mesh) return
+      setOpenEdgeResult(result)
+      setShowOpenEdges(true)
+      setStatus(
+        result.count === 0
+          ? 'No open edges found — mesh appears watertight.'
+          : `Found ${result.count.toLocaleString()} open edge${result.count === 1 ? '' : 's'} (shown in orange).`
+      )
+    })
   }, [mesh, showOpenEdges])
 
   const handleMeasureResult = useCallback(

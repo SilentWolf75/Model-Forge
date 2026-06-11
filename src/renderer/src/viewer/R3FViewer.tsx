@@ -13,7 +13,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import type { ThreeMfBuildObjectSummary, ThreeMfPackageMeta, TriangleMesh } from '../mesh/types'
 import { triangleMeshToGeometry } from '../mesh/toThree'
-import { computeWallThicknessColors } from '../mesh/wallThickness'
+import { wallThicknessAsync } from '../workers/analysisClient'
 import { type CameraPresetId } from './cameraPrefs'
 
 // ─── Dev diagnostics ──────────────────────────────────────────────────────────
@@ -734,35 +734,32 @@ function ViewerScene({
         const capturedFlat = flatGeo
         const capturedPending = pendingMat
 
-        // Run computation on next tick so the frame can render the grey placeholder first
-        setTimeout(() => {
-          if (!capturedObj.userData.wallThickApplied) return  // mode was exited before we ran
+        // Heavy computation runs in the analysis worker — the UI stays fully
+        // interactive while the grey placeholder is shown.
+        void (async () => {
           const posAttr  = capturedFlat.attributes.position as THREE.BufferAttribute
           const triCount = posAttr.count / 3
-          if (triCount > 0) {
-            const positions = new Float32Array(posAttr.array)
-            const flatIdx   = new Uint32Array(triCount * 3)
-            for (let i = 0; i < flatIdx.length; i++) flatIdx[i] = i
-            const box  = new THREE.Box3().setFromBufferAttribute(posAttr)
-            const diag = box.min.distanceTo(box.max)
-            const maxD = Math.max(2, Math.min(15, diag * 0.08))
-            const { perTriColor } = computeWallThicknessColors(
-              { positions, indices: flatIdx } as import('../mesh/types').TriangleMesh,
-              { maxDistMm: maxD }
-            )
-            const colorArr = new Float32Array(triCount * 9)
-            for (let t = 0; t < triCount; t++) {
-              const r=perTriColor[t*3]!, g=perTriColor[t*3+1]!, b=perTriColor[t*3+2]!
-              colorArr[t*9]=r;   colorArr[t*9+1]=g; colorArr[t*9+2]=b
-              colorArr[t*9+3]=r; colorArr[t*9+4]=g; colorArr[t*9+5]=b
-              colorArr[t*9+6]=r; colorArr[t*9+7]=g; colorArr[t*9+8]=b
-            }
-            capturedFlat.setAttribute('color', new THREE.Float32BufferAttribute(colorArr, 3))
-            const colorMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 })
-            capturedObj.material = colorMat
-            capturedPending.dispose()
+          if (triCount === 0) return
+          const positions = new Float32Array(posAttr.array)
+          const flatIdx   = new Uint32Array(triCount * 3)
+          for (let i = 0; i < flatIdx.length; i++) flatIdx[i] = i
+          const box  = new THREE.Box3().setFromBufferAttribute(posAttr)
+          const diag = box.min.distanceTo(box.max)
+          const maxD = Math.max(2, Math.min(15, diag * 0.08))
+          const { perTriColor } = await wallThicknessAsync(positions, flatIdx, { maxDistMm: maxD })
+          if (!capturedObj.userData.wallThickApplied) return  // mode was exited while computing
+          const colorArr = new Float32Array(triCount * 9)
+          for (let t = 0; t < triCount; t++) {
+            const r=perTriColor[t*3]!, g=perTriColor[t*3+1]!, b=perTriColor[t*3+2]!
+            colorArr[t*9]=r;   colorArr[t*9+1]=g; colorArr[t*9+2]=b
+            colorArr[t*9+3]=r; colorArr[t*9+4]=g; colorArr[t*9+5]=b
+            colorArr[t*9+6]=r; colorArr[t*9+7]=g; colorArr[t*9+8]=b
           }
-        }, 0)
+          capturedFlat.setAttribute('color', new THREE.Float32BufferAttribute(colorArr, 3))
+          const colorMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 })
+          capturedObj.material = colorMat
+          capturedPending.dispose()
+        })()
       } else if (obj.material instanceof THREE.MeshStandardMaterial) {
         applyViewMode(obj.material, viewMode)
       }
