@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0 Alpha 7 — unreleased
+## 2.0 Alpha 7 — 2026-06-11
 
 ### Features
 - **Move mode (G):** Drag the model across the bed with the mouse — orbit pauses while dragging, the blob shadow follows live, and the move commits as an undoable translate that is exact in exports. Plain meshes are now normalised at load (XZ centred, Y snapped) so Move / Centre-on-bed are visible operations.
