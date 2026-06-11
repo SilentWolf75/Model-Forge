@@ -6,6 +6,7 @@ import {
   scaleMesh,
   computeOverhangScore,
   autoOrientMesh,
+  addMeshBeside,
 } from '../transform'
 import {
   rotateMeshQuarterTurnAroundX,
@@ -227,6 +228,52 @@ describe('computeOverhangScore', () => {
     const box = makeBox(0, 0, 0, 10, 10, 10)
     // 2 bottom triangles are bed contact, no overhangs → score = -1
     expect(computeOverhangScore(box)).toBeCloseTo(-1, 4)
+  })
+})
+
+describe('addMeshBeside', () => {
+  it('places the extra mesh to the right with the gap, on the bed, Z-centred', () => {
+    const base = makeBox(-10, 0, -10, 10, 20, 10)
+    const extra = makeBox(100, 5, 100, 104, 9, 108)   // arbitrary placement
+    const merged = addMeshBeside(base, extra, 10)
+    const b = bounds(merged)
+    // Base unchanged on the left; extra starts at base.maxX (10) + gap (10) = 20
+    expect(b.min[0]).toBeCloseTo(-10, 3)
+    expect(b.max[0]).toBeCloseTo(10 + 10 + 4, 3)      // base maxX + gap + extra width
+    // Extra dropped to the bed
+    expect(b.min[1]).toBeCloseTo(0, 3)
+    // Z extent symmetric around base centre (0): extra depth 8 centred → ±10 still dominates
+    expect(b.min[2]).toBeCloseTo(-10, 3)
+    expect(b.max[2]).toBeCloseTo(10, 3)
+  })
+
+  it('preserves both volumes and triangle counts', () => {
+    const base = makeBox(0, 0, 0, 2, 2, 2)
+    const extra = makeBox(0, 0, 0, 3, 3, 3)
+    const merged = addMeshBeside(base, extra)
+    expect(merged.indices.length).toBe(base.indices.length + extra.indices.length)
+    expect(signedVolume(merged)).toBeCloseTo(8 + 27, 2)
+  })
+
+  it('fills missing vertex colors with grey when one side is painted', () => {
+    const base = makeBox(0, 0, 0, 2, 2, 2)
+    const painted: TriangleMesh = {
+      ...makeBox(0, 0, 0, 1, 1, 1),
+      vertexColors: new Float32Array(8 * 3).fill(1), // all white
+    }
+    const merged = addMeshBeside(base, painted)
+    expect(merged.vertexColors).toBeDefined()
+    expect(merged.vertexColors!.length).toBe(merged.positions.length)
+    // base section grey, painted section white
+    expect(merged.vertexColors![0]).toBeCloseTo(0.78, 2)
+    expect(merged.vertexColors![base.positions.length]).toBeCloseTo(1, 3)
+  })
+
+  it('returns the other mesh when one side is empty', () => {
+    const box = makeBox(0, 0, 0, 1, 1, 1)
+    const empty: TriangleMesh = { positions: new Float32Array(0), indices: new Uint32Array(0) }
+    expect(addMeshBeside(box, empty)).toBe(box)
+    expect(addMeshBeside(empty, box)).toBe(box)
   })
 })
 

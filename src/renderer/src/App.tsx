@@ -10,7 +10,8 @@ import {
   snapMeshToBed,
   translateMesh,
   extractPlateMesh,
-  autoOrientMesh
+  autoOrientMesh,
+  addMeshBeside
 } from './mesh/transform'
 import { centerMeshOnBed } from './mesh/rotateAroundY'
 import {
@@ -854,6 +855,43 @@ export function App(): JSX.Element {
     setStatus(idleStatusMessage)
   }, [])
 
+  /**
+   * Load another model file and merge it into the current scene as an extra
+   * shell, auto-placed beside the existing geometry.  History keeps a snapshot
+   * so the add is undoable.  Plain meshes only (no multi-plate layouts).
+   */
+  const addModel = useCallback(async () => {
+    const base = meshRef.current
+    if (!base || base.plateParts?.length) return
+    const path = await window.api.openFileDialog()
+    if (!path) return
+    loadCancelledRef.current = false
+    setBusy(true)
+    setLoadPhase('Loading model to add…')
+    try {
+      const raw = await window.api.readFile(path)
+      const data = raw instanceof Uint8Array ? raw : new Uint8Array(raw)
+      const onProgress = (phase: string): void => { setLoadPhase(phase); setStatus(phase) }
+      let extra = await loadModelFromBuffer(path, data, onProgress, stepTessellationParams(stepTessPreset))
+      if (loadCancelledRef.current) { setStatus('Add cancelled.'); return }
+      if (extra.plateParts?.length) {
+        setStatus('Multi-plate files cannot be added to a scene — open them on their own.')
+        return
+      }
+      if (extra.positions.length === 0) { setStatus('File contains no geometry.'); return }
+      if (!path.toLowerCase().endsWith('.3mf')) extra = autoOrientMesh(extra).mesh
+      applyMeshOp(addMeshBeside(base, extra, 10))
+      const name = path.split(/[/\\]/).pop() ?? path
+      setStatus(`Added ${name} beside the current model. Use Move (G) to arrange.`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Add model error: ${msg}`)
+    } finally {
+      setBusy(false)
+      setLoadPhase(null)
+    }
+  }, [applyMeshOp, stepTessPreset])
+
   /** Clears the plate, then opens the file picker for the next model. */
   const openNewModel = useCallback(async () => {
     setMesh(null)
@@ -1353,6 +1391,7 @@ export function App(): JSX.Element {
     { id: 'open',        label: 'Open model…',                  run: () => void openFile() },
     { id: 'close',       label: 'Close model',                  run: closeModel,                    disabled: !mesh },
     { id: 'new',         label: 'New model…',                   run: () => void openNewModel(),     disabled: !mesh },
+    { id: 'add',         label: 'Add model to scene…',          run: () => void addModel(),         disabled: !mesh || Boolean(mesh?.plateParts?.length) },
     { id: 'undo',        label: `Undo${meshHistory.length ? ` (${meshHistory.length})` : ''}`, run: undo, disabled: meshHistory.length === 0 },
     { id: 'redo',        label: `Redo${meshFuture.length ? ` (${meshFuture.length})` : ''}`,  run: redo, disabled: meshFuture.length === 0 },
     { id: 'repair',      label: 'Repair mesh',                  description: 'Remove degenerate triangles and weld vertices', run: runRepair,       disabled: !mesh },
@@ -1395,7 +1434,7 @@ export function App(): JSX.Element {
     { id: 'dimensions',  label: showDimensions ? 'Dimensions: Hide' : 'Dimensions: Show', run: () => setShowDimensions((v) => !v), disabled: !mesh },
     { id: 'normals',     label: showNormals ? 'Normals: Hide'    : 'Normals: Show',       run: () => setShowNormals((v) => !v),    disabled: !mesh },
   ], [mesh, meshHistory.length, meshFuture.length, turntable, annotationMode, annotations.length, measureMode, moveMode, toggleMoveMode, showOpenEdges, showDimensions, showNormals, filePath,
-      openFile, closeModel, openNewModel, undo, redo, runRepair, snapToBed, runAutoOrient,
+      openFile, closeModel, openNewModel, addModel, undo, redo, runRepair, snapToBed, runAutoOrient,
       rotateAroundBedY, rotateAroundX, rotateAroundZ, mirrorX, mirrorY, mirrorZ, centerOnBed, cyclePlate,
       saveScreenshot, toggleOpenEdges, toggleMeasureMode, resetView, openInSlicer, exportAs, batchExportPlates])
 
@@ -1454,6 +1493,11 @@ export function App(): JSX.Element {
               </button>
               <button type="button" className="btn" onClick={() => void openNewModel()} disabled={busy}>
                 New model…
+              </button>
+              <button type="button" className="btn" onClick={() => void addModel()}
+                disabled={busy || Boolean(mesh?.plateParts?.length)}
+                title={mesh?.plateParts?.length ? 'Adding models is available for single-model files' : 'Load another file and place it beside this model'}>
+                Add model…
               </button>
             </>
           ) : null}
