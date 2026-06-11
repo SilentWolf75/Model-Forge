@@ -363,6 +363,8 @@ function ViewerScene({
   const annotDownRef           = useRef<[number, number]>([0, 0])
 
   const modelRootRef      = useRef<THREE.Group | null>(null)
+  /** Previous mesh prop — used to detect transform-only updates for the fast path. */
+  const lastMeshRef       = useRef<TriangleMesh | null>(null)
   const plateGroupsRef    = useRef<Map<number, THREE.Group>>(new Map())
   const bedGroupsRef      = useRef<THREE.Group[]>([])
   const bounceRef         = useRef<BounceState | null>(null)
@@ -612,6 +614,24 @@ function ViewerScene({
   // ── Mesh effect: full scene rebuild on load ────────────────────────────────
   useEffect(() => {
     viewModeRef.current = viewMode
+
+    // ── Fast path: transform-only update ─────────────────────────────────────
+    // Rigid transforms (rotate/mirror/translate/scale and their undos) share the
+    // indices array by reference, so we can patch the existing GPU position
+    // buffer in place instead of tearing down and rebuilding the whole scene.
+    // Camera stays put — no jarring reframe on every rotate.
+    const prevMesh = lastMeshRef.current
+    lastMeshRef.current = mesh
+    if (
+      mesh && prevMesh && mesh !== prevMesh &&
+      loadAnimSeq === lastSettledSeqRef.current &&     // not a fresh load
+      !mesh.plateParts?.length && !prevMesh.plateParts?.length &&
+      mesh.indices === prevMesh.indices &&
+      mesh.positions.length === prevMesh.positions.length &&
+      tryFastTransformUpdate(mesh)
+    ) {
+      return
+    }
 
     // Tear down previous model
     if (modelRootRef.current) { scene.remove(modelRootRef.current); disposeObject(modelRootRef.current); modelRootRef.current = null }
@@ -1202,6 +1222,44 @@ function ViewerScene({
     sceneObj.updateMatrixWorld(true)
     const wb = new THREE.Box3().setFromObject(sceneObj)
 
+    rebuildBedAndShadow(wb)
+
+    // Camera
+    const center = wb.getCenter(new THREE.Vector3())
+    const ext    = wb.min.distanceTo(wb.max)
+    const radius = Math.max(ext * DEFAULT_RADIUS_FACTOR, 0.08)
+    const ctrl   = controlsRef.current
+    if (ctrl) setCameraOrbit(camera, ctrl, center, radius, DEFAULT_VIEW_ALPHA, DEFAULT_VIEW_BETA)
+
+    // Settle bounce on fresh load (not on rotate/repair — same loadAnimSeq)
+    if (loadAnimSeq > lastSettledSeqRef.current) {
+      lastSettledSeqRef.current = loadAnimSeq
+      const restY = sceneObj.position.y
+      const h     = wb.max.y - wb.min.y
+      const lift  = Math.min(220, Math.max(40, h * 0.75))
+      sceneObj.position.y = restY + lift
+      bounceRef.current = { mesh: sceneObj, startY: restY + lift, restY, startTime: -1 }
+    }
+  }
+
+  /**
+   * (Re)create the single-plate bed grid and blob shadow sized to the model's
+   * world-space footprint.  Idempotent: removes any existing bed/shadow first,
+   * so both the full rebuild and the transform fast-path can call it.
+   */
+  function rebuildBedAndShadow(wb: THREE.Box3): void {
+    for (const bg of bedGroupsRef.current) { scene.remove(bg); disposeObject(bg) }
+    bedGroupsRef.current = []
+    if (blobShadowRef.current) {
+      const b = blobShadowRef.current
+      scene.remove(b)
+      b.geometry.dispose()
+      const bm = b.material as THREE.MeshBasicMaterial
+      bm.map?.dispose()
+      bm.dispose()
+      blobShadowRef.current = null
+    }
+
     // Bed size: 50 mm padding on every side of the model's XZ footprint.
     // Width and depth are computed independently so the plate matches the
     // model's aspect ratio rather than always being a square.
@@ -1243,23 +1301,49 @@ function ViewerScene({
       scene.add(blobMesh)
       blobShadowRef.current = blobMesh
     }
+  }
 
-    // Camera
-    const center = wb.getCenter(new THREE.Vector3())
-    const ext    = wb.min.distanceTo(wb.max)
-    const radius = Math.max(ext * DEFAULT_RADIUS_FACTOR, 0.08)
-    const ctrl   = controlsRef.current
-    if (ctrl) setCameraOrbit(camera, ctrl, center, radius, DEFAULT_VIEW_ALPHA, DEFAULT_VIEW_BETA)
+  /**
+   * Transform-only update: write new positions into the existing GPU buffer,
+   * re-place the model on the bed, and resize the bed/shadow.  Returns false
+   * when the current scene shape can't be patched (sub-object group, wall-thick
+   * overlay active, vertex count changed) so the caller falls back to a full
+   * rebuild.  The camera is deliberately left untouched.
+   */
+  function tryFastTransformUpdate(m: TriangleMesh): boolean {
+    const root = modelRootRef.current
+    if (!root || root.name !== 'modelRoot') return false
+    const m3 = root.getObjectByName('model')
+    if (!(m3 instanceof THREE.Mesh)) return false           // sub-object group path
+    if (m3.userData.wallThickApplied || m3.userData.origGeo) return false
+    const geo = m3.geometry as THREE.BufferGeometry
+    const posAttr = geo.getAttribute('position') as THREE.BufferAttribute | undefined
+    if (!posAttr || posAttr.array.length !== m.positions.length) return false
 
-    // Settle bounce on fresh load (not on rotate/repair — same loadAnimSeq)
-    if (loadAnimSeq > lastSettledSeqRef.current) {
-      lastSettledSeqRef.current = loadAnimSeq
-      const restY = sceneObj.position.y
-      const h     = wb.max.y - wb.min.y
-      const lift  = Math.min(220, Math.max(40, h * 0.75))
-      sceneObj.position.y = restY + lift
-      bounceRef.current = { mesh: sceneObj, startY: restY + lift, restY, startTime: -1 }
-    }
+    // Same overlay invalidation as the full rebuild — they reference old coords
+    clearOverlaysByName(scene, ['__openEdges', '__measureLine', '__measureDotA', '__measureDotB', '__com', '__comDot'])
+    measurePtARef.current = null
+
+    ;(posAttr.array as Float32Array).set(m.positions)
+    posAttr.needsUpdate = true
+    geo.computeVertexNormals()
+    geo.computeBoundingBox()
+    geo.computeBoundingSphere()
+    const lb = geo.boundingBox!
+
+    // Same placement rules as buildSinglePlate: XZ centred on the bed origin,
+    // Y offset is constant so a floating mesh (minY > 0) visibly floats.
+    m3.scale.y = 1
+    m3.position.set(
+      -(lb.min.x + lb.max.x) / 2,
+      BED_SURFACE_Y + MODEL_BED_GAP_MM,
+      -(lb.min.z + lb.max.z) / 2,
+    )
+    applyThinPartBoost(m3)
+    m3.updateMatrixWorld(true)
+
+    rebuildBedAndShadow(new THREE.Box3().setFromObject(m3))
+    return true
   }
 
   // Html overlays: measurement label + annotation pins

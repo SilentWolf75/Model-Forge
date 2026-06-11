@@ -26,10 +26,14 @@ function bboxCenter(p: Float32Array): { cx: number; cy: number; cz: number } {
 }
 
 function cloneLike(mesh: TriangleMesh, positions: Float32Array): TriangleMesh {
+  // indices / vertexColors are never mutated in place anywhere in the app, so
+  // rigid transforms share the same arrays.  The viewer relies on reference
+  // equality of `indices` to detect transform-only updates and patch the GPU
+  // position buffer in place instead of rebuilding the scene.
   return {
     positions,
-    indices: new Uint32Array(mesh.indices),
-    ...(mesh.vertexColors ? { vertexColors: new Float32Array(mesh.vertexColors) } : {}),
+    indices: mesh.indices,
+    ...(mesh.vertexColors ? { vertexColors: mesh.vertexColors } : {}),
     ...(mesh.packageMeta ? { packageMeta: mesh.packageMeta } : {})
   }
 }
