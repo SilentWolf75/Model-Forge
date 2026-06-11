@@ -12,7 +12,9 @@
     "pack:win": "npm run icons && npm run build && node scripts/pack-win.cjs",
     "pack:win:setup": "npm run icons && npm run build && node scripts/pack-win.cjs -- --win nsis",
     "pack:mac": "npm run icons && npm run build && electron-builder --mac --publish never",
-    "icons": "node scripts/generate-icon.mjs"
+    "icons": "node scripts/generate-icon.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@react-three/drei": "^9.122.0",
@@ -38,7 +40,8 @@
     "rcedit": "^5.0.2",
     "sharp": "^0.33.5",
     "typescript": "^5.6.3",
-    "vite": "^8.0.14"
+    "vite": "^8.0.14",
+    "vitest": "^4.1.8"
   },
   "build": {
     "appId": "com.modelforge.viewer",
@@ -149,16 +152,38 @@
         }
       ],
       "fileAssociations": [
-        { "ext": "stl",  "name": "STL 3D model",  "role": "Viewer" },
-        { "ext": "obj",  "name": "OBJ 3D model",  "role": "Viewer" },
-        { "ext": "3mf",  "name": "3MF 3D model",  "role": "Viewer" },
-        { "ext": "step", "name": "STEP CAD file", "role": "Viewer" },
-        { "ext": "stp",  "name": "STEP CAD file", "role": "Viewer" }
+        {
+          "ext": "stl",
+          "name": "STL 3D model",
+          "role": "Viewer"
+        },
+        {
+          "ext": "obj",
+          "name": "OBJ 3D model",
+          "role": "Viewer"
+        },
+        {
+          "ext": "3mf",
+          "name": "3MF 3D model",
+          "role": "Viewer"
+        },
+        {
+          "ext": "step",
+          "name": "STEP CAD file",
+          "role": "Viewer"
+        },
+        {
+          "ext": "stp",
+          "name": "STEP CAD file",
+          "role": "Viewer"
+        }
       ],
       "target": [
         {
           "target": "dmg",
-          "arch": ["universal"]
+          "arch": [
+            "universal"
+          ]
         }
       ]
     },
