@@ -12,6 +12,7 @@ import {
   extractPlateMesh,
   autoOrientMesh
 } from './mesh/transform'
+import { centerMeshOnBed } from './mesh/rotateAroundY'
 import {
   applyMeshTransformOp,
   invertOp,
@@ -246,6 +247,7 @@ function ShortcutsModal({ onClose }: { onClose: () => void }): JSX.Element {
             <tr><td className="sc-key">A</td><td>Toggle wall thickness heat map</td></tr>
             <tr><td className="sc-key">T</td><td>Toggle turntable (auto-rotate)</td></tr>
             <tr><td className="sc-key">M</td><td>Toggle measure mode</td></tr>
+            <tr><td className="sc-key">G</td><td>Toggle move mode (drag model on bed)</td></tr>
             <tr><td className="sc-key">E</td><td>Toggle open edge highlight</td></tr>
             <tr><td className="sc-key">[ / ]</td><td>Previous / next plate (multi-plate 3MF)</td></tr>
             <tr><td className="sc-key">Ctrl+Z</td><td>Undo mesh transform</td></tr>
@@ -492,6 +494,7 @@ export function App(): JSX.Element {
   const [openEdgeResult, setOpenEdgeResult] = useState<{ count: number; linePositions: Float32Array } | null>(null)
   const [showOpenEdges, setShowOpenEdges] = useState(false)
   const [measureMode, setMeasureMode] = useState(false)
+  const [moveMode, setMoveMode] = useState(false)
   const [measureResult, setMeasureResult] = useState<{
     distanceMm: number
     ptA: [number, number, number]
@@ -699,19 +702,25 @@ export function App(): JSX.Element {
       setStatus('Load cancelled.')
       return
     }
-    // Auto-orient non-3MF files so the flat base sits on the print bed, then snap so
-    // the lowest vertex is exactly at Y=0.  3MF files are already correctly oriented
-    // and positioned by the slicer (minY ≈ 0) and must not be rotated.
+    // Auto-orient non-3MF files so the flat base sits on the print bed.  3MF files
+    // are already correctly oriented by the slicer and must not be rotated.
     const is3mf = label.toLowerCase().endsWith('.3mf')
     if (!is3mf && loaded.positions.length > 0) {
       const { mesh: oriented } = autoOrientMesh(loaded)
-      loaded = snapMeshToBed(oriented)
+      loaded = oriented
+    }
+    // Plain meshes (no plate layout) are normalised to the bed: XZ centre at the
+    // origin, lowest vertex at Y=0.  The viewer trusts these coordinates, which
+    // is what makes Move mode / Centre-on-bed / translate-undo visible.
+    if (!loaded.plateParts?.length && loaded.positions.length > 0) {
+      loaded = snapMeshToBed(centerMeshOnBed(loaded))
     }
     setFocusedPlateId(null)
     setShowOpenEdges(false)
     setOpenEdgeResult(null)
     setMeasureMode(false)
     setMeasureResult(null)
+    setMoveMode(false)
     setMeshHistory([])
     setMeshFuture([])
     setAnnotations([])
@@ -835,6 +844,7 @@ export function App(): JSX.Element {
     setOpenEdgeResult(null)
     setMeasureMode(false)
     setMeasureResult(null)
+    setMoveMode(false)
     setMeshHistory([])
     setMeshFuture([])
     setAnnotations([])
@@ -856,6 +866,7 @@ export function App(): JSX.Element {
     setOpenEdgeResult(null)
     setMeasureMode(false)
     setMeasureResult(null)
+    setMoveMode(false)
     setMeshHistory([])
     setMeshFuture([])
     setAnnotations([])
@@ -1099,6 +1110,26 @@ export function App(): JSX.Element {
     setStatus('Centred on bed.')
   }, [mesh, performOp])
 
+  const toggleMoveMode = useCallback(() => {
+    if (!mesh) return
+    setMoveMode((v) => {
+      const next = !v
+      if (next) {
+        setMeasureMode(false); setMeasureResult(null)
+        setAnnotationMode(false)
+        setStatus('Move: drag the model to slide it across the bed. Orbit is paused while dragging.')
+      }
+      return next
+    })
+  }, [mesh])
+
+  /** Drag release from the viewer — commit as an undoable translate op. */
+  const handleMoveCommit = useCallback((dxMm: number, dzMm: number) => {
+    if (!meshRef.current) return
+    performOp({ kind: 'translate', dx: dxMm, dy: 0, dz: dzMm })
+    setStatus(`Moved ${Math.hypot(dxMm, dzMm).toFixed(1)} mm.`)
+  }, [performOp])
+
   const cyclePlate = useCallback((dir: 1 | -1) => {
     if (!mesh?.plateParts || mesh.plateParts.length === 0) return
     const ids = [...new Set(mesh.plateParts.map((p) => p.plateId))].sort((a, b) => a - b)
@@ -1156,6 +1187,7 @@ export function App(): JSX.Element {
     setMeasureMode((m) => {
       if (!m) {
         setMeasureResult(null)
+        setMoveMode(false)
         setStatus('Measure: click two points on the model surface.')
       } else {
         setMeasureResult(null)
@@ -1307,6 +1339,7 @@ export function App(): JSX.Element {
         case 'f': case 'F': if (mesh) setViewMode((v) => v === 'faceOrient' ? 'solid' : 'faceOrient'); break
         case 'h': case 'H': if (mesh) setViewMode((v) => v === 'overhang' ? 'solid' : 'overhang'); break
         case 'a': case 'A': if (mesh) setViewMode((v) => v === 'wallThick' ? 'solid' : 'wallThick'); break
+        case 'g': case 'G': if (mesh && !mesh.plateParts?.length) toggleMoveMode(); break
         case 't': case 'T': if (mesh) setTurntable((v) => !v); break
         case '[': if (mesh) cyclePlate(-1); break
         case ']': if (mesh) cyclePlate(1);  break
@@ -1314,7 +1347,7 @@ export function App(): JSX.Element {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [busy, aboutOpen, shortcutsOpen, exportMenuOpen, cmdPaletteOpen, mesh, openFile, resetView, saveScreenshot, snapView, toggleMeasureMode, toggleOpenEdges, undo, redo, cyclePlate])
+  }, [busy, aboutOpen, shortcutsOpen, exportMenuOpen, cmdPaletteOpen, mesh, openFile, resetView, saveScreenshot, snapView, toggleMeasureMode, toggleMoveMode, toggleOpenEdges, undo, redo, cyclePlate])
 
   const commands = useMemo<Command[]>(() => [
     { id: 'open',        label: 'Open model…',                  run: () => void openFile() },
@@ -1345,11 +1378,12 @@ export function App(): JSX.Element {
     { id: 'mat-matte',   label: 'Material: Matte (flat)',        run: () => setMaterialPreset('matte'),   disabled: !mesh },
     { id: 'mat-metal',   label: 'Material: Metallic',            run: () => setMaterialPreset('metal'),   disabled: !mesh },
     { id: 'turntable',   label: turntable ? 'Turntable: Stop (T)' : 'Turntable: Start (T)', run: () => setTurntable((v) => !v), disabled: !mesh },
-    { id: 'annotate',    label: annotationMode ? 'Annotations: Stop placing' : 'Annotations: Place mode', run: () => setAnnotationMode((v) => !v), disabled: !mesh },
+    { id: 'annotate',    label: annotationMode ? 'Annotations: Stop placing' : 'Annotations: Place mode', run: () => setAnnotationMode((v) => { if (!v) setMoveMode(false); return !v }), disabled: !mesh },
     { id: 'clear-ann',   label: 'Clear all annotations',        run: () => { setAnnotations([]); setStatus('Annotations cleared.') }, disabled: annotations.length === 0 },
     { id: 'screenshot',  label: 'Save screenshot (P)',           run: () => void saveScreenshot(),    disabled: !mesh },
     { id: 'open-edges',  label: showOpenEdges ? 'Open edges: Hide (E)' : 'Open edges: Show (E)', run: toggleOpenEdges, disabled: !mesh },
     { id: 'measure',     label: measureMode ? 'Measure mode: Off (M)' : 'Measure mode: On (M)', run: toggleMeasureMode, disabled: !mesh },
+    { id: 'move',        label: moveMode ? 'Move mode: Off (G)' : 'Move mode: On (G)', run: toggleMoveMode, disabled: !mesh || Boolean(mesh?.plateParts?.length) },
     { id: 'reset-view',  label: 'Reset camera (R)',              run: resetView,                      disabled: !mesh },
     { id: 'open-slicer', label: 'Open in slicer',               run: () => void openInSlicer(),      disabled: !filePath },
     { id: 'export-stl',  label: 'Export STL',                   run: () => void exportAs('stl'),     disabled: !mesh },
@@ -1360,7 +1394,7 @@ export function App(): JSX.Element {
     { id: 'settings',    label: 'Settings (⚙)',                   run: () => setSettingsOpen(true) },
     { id: 'dimensions',  label: showDimensions ? 'Dimensions: Hide' : 'Dimensions: Show', run: () => setShowDimensions((v) => !v), disabled: !mesh },
     { id: 'normals',     label: showNormals ? 'Normals: Hide'    : 'Normals: Show',       run: () => setShowNormals((v) => !v),    disabled: !mesh },
-  ], [mesh, meshHistory.length, meshFuture.length, turntable, annotationMode, annotations.length, measureMode, showOpenEdges, showDimensions, showNormals, filePath,
+  ], [mesh, meshHistory.length, meshFuture.length, turntable, annotationMode, annotations.length, measureMode, moveMode, toggleMoveMode, showOpenEdges, showDimensions, showNormals, filePath,
       openFile, closeModel, openNewModel, undo, redo, runRepair, snapToBed, runAutoOrient,
       rotateAroundBedY, rotateAroundX, rotateAroundZ, mirrorX, mirrorY, mirrorZ, centerOnBed, cyclePlate,
       saveScreenshot, toggleOpenEdges, toggleMeasureMode, resetView, openInSlicer, exportAs, batchExportPlates])
@@ -1511,6 +1545,13 @@ export function App(): JSX.Element {
               title={!mesh ? 'Open a model first' : 'Move the model so its XZ centre is at the bed origin'}>
               Centre
             </button>
+            <button type="button" className={moveMode ? 'btn active' : 'btn'} onClick={toggleMoveMode}
+              disabled={!mesh || busy || Boolean(mesh?.plateParts?.length)}
+              title={!mesh ? 'Open a model first'
+                : mesh.plateParts?.length ? 'Move is available for single-model files (STL, OBJ, STEP…)'
+                : 'Drag the model to slide it across the bed (G)'}>
+              Move
+            </button>
             <button type="button" className="btn" onClick={mirrorX} disabled={!mesh || busy}
               title={!mesh ? 'Open a model first' : 'Mirror on X axis (left ↔ right)'}>
               ⇔X
@@ -1619,7 +1660,7 @@ export function App(): JSX.Element {
           <button
             type="button"
             className={annotationMode ? 'btn active' : 'btn'}
-            onClick={() => setAnnotationMode((v) => !v)}
+            onClick={() => setAnnotationMode((v) => { if (!v) setMoveMode(false); return !v })}
             disabled={!mesh || busy}
             title={!mesh ? 'Open a model first' : 'Click the model surface to place text annotation pins'}
           >
@@ -1747,6 +1788,8 @@ export function App(): JSX.Element {
             openEdgeLinePositions={showOpenEdges ? openEdgeResult?.linePositions ?? null : null}
             measureMode={measureMode}
             onMeasureResult={handleMeasureResult}
+            moveMode={moveMode}
+            onMoveCommit={handleMoveCommit}
             clipY={clipY}
             showCoM={showCoM}
             showDimensions={showDimensions}

@@ -123,6 +123,10 @@ interface Props {
   openEdgeLinePositions?: Float32Array | null
   measureMode?: boolean
   onMeasureResult?: (distanceMm: number, ptA: [number, number, number], ptB: [number, number, number]) => void
+  /** When true, left-drag on the model slides it across the bed plane (single plain mesh only). */
+  moveMode?: boolean
+  /** Called on drag release with the total world-space XZ delta in mm. */
+  onMoveCommit?: (dxMm: number, dzMm: number) => void
   /** Y-axis clip height in mm; null = no clipping.  Positive = keep below this height. */
   clipY?: number | null
   /** When true, show a center-of-mass crosshair marker in the scene. */
@@ -347,7 +351,7 @@ function worldBox(obj: THREE.Object3D): THREE.Box3 {
 function ViewerScene({
   outerRef, controlsRef,
   mesh, viewMode, loadAnimSeq,
-  openEdgeLinePositions, measureMode, onMeasureResult,
+  openEdgeLinePositions, measureMode, onMeasureResult, moveMode, onMoveCommit,
   clipY, showCoM, showDimensions, showNormals, defaultBedMm, explodedView,
   materialPreset, annotationMode, annotations, onAnnotationPlace,
 }: ViewerSceneProps): JSX.Element {
@@ -358,6 +362,8 @@ function ViewerScene({
   const viewModeRef          = useRef<ViewMode>(viewMode)
   const onMeasureResultRef     = useRef(onMeasureResult)
   onMeasureResultRef.current   = onMeasureResult
+  const onMoveCommitRef        = useRef(onMoveCommit)
+  onMoveCommitRef.current      = onMoveCommit
   const onAnnotationPlaceRef   = useRef(onAnnotationPlace)
   onAnnotationPlaceRef.current = onAnnotationPlace
   const annotDownRef           = useRef<[number, number]>([0, 0])
@@ -916,6 +922,91 @@ function ViewerScene({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [annotationMode])
 
+  // ── Move mode: drag the model across the bed plane ─────────────────────────
+  useEffect(() => {
+    const canvas = gl.domElement
+    if (!moveMode) return
+    canvas.style.cursor = 'grab'
+
+    let dragging  = false
+    let target: THREE.Mesh | null = null
+    const startPos   = new THREE.Vector3()
+    const blobStart  = new THREE.Vector3()
+    const grabPoint  = new THREE.Vector3()
+    const grabPlane  = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+    let totalDX = 0, totalDZ = 0
+
+    const rayFromEvent = (e: PointerEvent): THREE.Raycaster => {
+      const rect = canvas.getBoundingClientRect()
+      const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
+      const caster = new THREE.Raycaster()
+      caster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera)
+      return caster
+    }
+
+    const onDown = (e: PointerEvent): void => {
+      if (e.button !== 0) return
+      const m3 = modelRootRef.current?.getObjectByName('model')
+      if (!(m3 instanceof THREE.Mesh)) return    // plain single mesh only
+      const hits = rayFromEvent(e).intersectObject(m3, false)
+      if (!hits.length || !hits[0]!.point) return
+      dragging = true
+      target = m3
+      startPos.copy(m3.position)
+      if (blobShadowRef.current) blobStart.copy(blobShadowRef.current.position)
+      grabPoint.copy(hits[0]!.point)
+      // Drag on the horizontal plane through the grab point so the model
+      // follows the cursor exactly at the grabbed height.
+      grabPlane.set(new THREE.Vector3(0, 1, 0), -hits[0]!.point.y)
+      totalDX = 0; totalDZ = 0
+      if (controlsRef.current) controlsRef.current.enabled = false
+      canvas.setPointerCapture(e.pointerId)
+      canvas.style.cursor = 'grabbing'
+    }
+
+    const onMove = (e: PointerEvent): void => {
+      if (!dragging || !target) return
+      const pt = new THREE.Vector3()
+      if (!rayFromEvent(e).ray.intersectPlane(grabPlane, pt)) return
+      totalDX = pt.x - grabPoint.x
+      totalDZ = pt.z - grabPoint.z
+      target.position.x = startPos.x + totalDX
+      target.position.z = startPos.z + totalDZ
+      // Blob shadow follows the live drag
+      const blob = blobShadowRef.current
+      if (blob) { blob.position.x = blobStart.x + totalDX; blob.position.z = blobStart.z + totalDZ }
+    }
+
+    const onUp = (e: PointerEvent): void => {
+      if (!dragging) return
+      dragging = false
+      if (controlsRef.current) controlsRef.current.enabled = true
+      try { canvas.releasePointerCapture(e.pointerId) } catch { /* already released */ }
+      canvas.style.cursor = 'grab'
+      // Reset the live preview offset — the commit translates the geometry and
+      // the mesh-effect fast path re-renders at the new coordinates.
+      if (target) { target.position.x = startPos.x; target.position.z = startPos.z }
+      const blob = blobShadowRef.current
+      if (blob) { blob.position.x = blobStart.x; blob.position.z = blobStart.z }
+      target = null
+      if (Math.hypot(totalDX, totalDZ) > 0.01) onMoveCommitRef.current?.(totalDX, totalDZ)
+      totalDX = 0; totalDZ = 0
+    }
+
+    canvas.addEventListener('pointerdown', onDown)
+    canvas.addEventListener('pointermove', onMove)
+    canvas.addEventListener('pointerup', onUp)
+    return () => {
+      canvas.removeEventListener('pointerdown', onDown)
+      canvas.removeEventListener('pointermove', onMove)
+      canvas.removeEventListener('pointerup', onUp)
+      canvas.style.cursor = ''
+      if (controlsRef.current) controlsRef.current.enabled = true
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moveMode])
+
   // ── Section / clipping plane ───────────────────────────────────────────────
   useEffect(() => {
     if (clipY == null) {
@@ -1192,8 +1283,14 @@ function ViewerScene({
       const mesh3       = new THREE.Mesh(geo, mat)
       mesh3.name        = 'model'
       mesh3.castShadow  = true
-      mesh3.position.x = -(lb.min.x + lb.max.x) / 2
-      mesh3.position.z = -(lb.min.z + lb.max.z) / 2
+      // Plain meshes (no plateParts) are centred on the bed at load time and
+      // translate ops move the geometry itself, so the viewer trusts the
+      // coordinates — required for Move mode / Centre-on-bed to be visible.
+      // 3MF-derived meshes keep the legacy auto-centring.
+      if (m.plateParts?.length) {
+        mesh3.position.x = -(lb.min.x + lb.max.x) / 2
+        mesh3.position.z = -(lb.min.z + lb.max.z) / 2
+      }
       sceneObj = mesh3
     }
 
@@ -1258,13 +1355,15 @@ function ViewerScene({
     }
 
     // Bed size: 50 mm padding on every side of the model's XZ footprint.
-    // Width and depth are computed independently so the plate matches the
-    // model's aspect ratio rather than always being a square.
+    // The bed is centred at the origin and sized symmetrically so a model
+    // dragged off-centre (Move mode) is still fully on the plate.
     const footW = wb.max.x - wb.min.x
     const footD = wb.max.z - wb.min.z
+    const spanW = 2 * Math.max(Math.abs(wb.min.x), Math.abs(wb.max.x))
+    const spanD = 2 * Math.max(Math.abs(wb.min.z), Math.abs(wb.max.z))
     const bedRef = defaultBedMm ?? DEFAULT_BED_MM
-    const gW    = Math.min(BED_MAX_MM, Math.max(BED_MIN_MM, Math.max(footW + BED_PAD_MM * 2, bedRef)))
-    const gD    = Math.min(BED_MAX_MM, Math.max(BED_MIN_MM, Math.max(footD + BED_PAD_MM * 2, bedRef)))
+    const gW    = Math.min(BED_MAX_MM, Math.max(BED_MIN_MM, Math.max(spanW + BED_PAD_MM * 2, bedRef)))
+    const gD    = Math.min(BED_MAX_MM, Math.max(BED_MIN_MM, Math.max(spanD + BED_PAD_MM * 2, bedRef)))
     const bed   = createBedGroup(gW, gD)
     scene.add(bed)
     bedGroupsRef.current = [bed]
@@ -1292,7 +1391,8 @@ function ViewerScene({
       const blobGeo  = new THREE.PlaneGeometry(sw, sd)
       const blobMesh = new THREE.Mesh(blobGeo, blobMat)
       blobMesh.rotation.x = -Math.PI / 2
-      blobMesh.position.set(0, BED_SURFACE_Y + 0.1, 0)
+      // Centre the shadow under the model footprint (may be off-origin after Move)
+      blobMesh.position.set((wb.min.x + wb.max.x) / 2, BED_SURFACE_Y + 0.1, (wb.min.z + wb.max.z) / 2)
       blobMesh.renderOrder = 1
       blobMesh.name = '__blobShadow'
       scene.add(blobMesh)
@@ -1326,16 +1426,12 @@ function ViewerScene({
     geo.computeVertexNormals()
     geo.computeBoundingBox()
     geo.computeBoundingSphere()
-    const lb = geo.boundingBox!
 
-    // Same placement rules as buildSinglePlate: XZ centred on the bed origin,
+    // Same placement rules as buildSinglePlate for plain meshes: geometry
+    // coordinates are trusted in XZ (translate ops moved the vertices), and the
     // Y offset is constant so a floating mesh (minY > 0) visibly floats.
     m3.scale.y = 1
-    m3.position.set(
-      -(lb.min.x + lb.max.x) / 2,
-      BED_SURFACE_Y + MODEL_BED_GAP_MM,
-      -(lb.min.z + lb.max.z) / 2,
-    )
+    m3.position.set(0, BED_SURFACE_Y + MODEL_BED_GAP_MM, 0)
     applyThinPartBoost(m3)
     m3.updateMatrixWorld(true)
 
