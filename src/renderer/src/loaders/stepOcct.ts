@@ -1,7 +1,6 @@
 import type { TriangleMesh } from '../mesh/types'
 import type { LoadProgressCallback } from './loadTypes'
 import { mergeMeshes } from '../mesh/merge'
-import occtImportJsFactory from 'occt-import-js'
 import occtWasmUrl from 'occt-import-js/dist/occt-import-js.wasm?url'
 
 interface OcctVec3 {
@@ -92,6 +91,10 @@ export async function loadStep(
 ): Promise<TriangleMesh> {
   await yieldToMain()
   onProgress?.('Starting CAD engine (first STEP load downloads WASM)…')
+
+  // Dynamic import: the Emscripten JS glue (and its chunk) only loads when a
+  // STEP file is actually opened, keeping it out of the startup bundle.
+  const { default: occtImportJsFactory } = await import('occt-import-js')
 
   const init = occtImportJsFactory as unknown as (opts?: {
     locateFile?: (path: string, scriptDirectory: string) => string
